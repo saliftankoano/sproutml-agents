@@ -18,6 +18,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from prompts import orchestrator_prompt, preprocessing_agent_prompt
 from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
+from types import SimpleNamespace
 """
 The agent needed are:
     1- Orchestator
@@ -32,6 +33,8 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 app = FastAPI(title="SproutML Training API", version="1.0.0")
 DAYTONA_KEY = os.getenv("DAYTONA_API_KEY")
 daytona = Daytona(DaytonaConfig(api_key=DAYTONA_KEY))
+# Track a persistent sandbox per job
+persistent_sandboxes: Dict[str, Any] = {}
 
 # In-memory job store (in production, use Redis or database)
 job_store: Dict[str, Dict[str, Any]] = {}
@@ -53,7 +56,7 @@ app.add_middleware(
  
 
 async def process_training_job(job_id: str, training_request: str, temp_file_path: str):
-    """Process training job asynchronously"""
+    """Create a persistent Daytona sandbox per job, upload dataset, run, then clean up."""
     try:
         # Update job status to processing
         job_store[job_id]["status"] = "processing"
@@ -61,6 +64,17 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
         print(f"Starting training job {job_id}")
         
+        # Create persistent sandbox and upload dataset once
+        sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
+        persistent_sandboxes[job_id] = sandbox
+        ws = "workspace"
+        try:
+            sandbox.process.exec("mkdir -p workspace", cwd=".", timeout=30)
+        except Exception:
+            pass
+        with open(temp_file_path, "rb") as f:
+            sandbox.fs.upload_file(f.read(), f"{ws}/{os.path.basename(temp_file_path)}")
+
         # Create preprocessor agent (stateless tool)
         persistent_preprocessor = create_preprocessor_agent()
         
@@ -72,7 +86,8 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         )
         
         # Run the orchestrator agent with the training context
-        result = await Runner.run(job_orchestrator, training_request)
+        tool_context = SimpleNamespace(job_id=job_id, dataset_filename=os.path.basename(temp_file_path))
+        result = await Runner.run(job_orchestrator, training_request, context=tool_context)
         
         # Update job with results
         job_store[job_id].update({
@@ -104,7 +119,13 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         except Exception as cleanup_error:
             print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
         
-        # No container cleanup required
+        # Delete persistent sandbox
+        sb = persistent_sandboxes.pop(job_id, None)
+        if sb is not None:
+            try:
+                sb.delete()
+            except Exception:
+                pass
 
 async def test_orchestrator():
     """Test function for the orchestrator - can be used for debugging"""
@@ -133,36 +154,54 @@ def daytona_run_script(
 
     Returns combined stdout/stderr and exit_code as text.
     """
-    sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
+    job_id = getattr(ctx.context, "job_id", None)
+    sandbox = None
+    if job_id and job_id in persistent_sandboxes:
+        sandbox = persistent_sandboxes[job_id]
+    else:
+        sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
     try:
-        # Ensure workspace exists implicitly by using paths under it
+        # Ensure workspace exists and is usable
         ws = "workspace"
+        try:
+            sandbox.process.exec("mkdir -p workspace", cwd=".", timeout=30)
+        except Exception:
+            pass
         # Upload script
         sandbox.fs.upload_file(script.encode("utf-8"), f"{ws}/{script_name}")
 
-        # Upload dataset from server temp path if present
-        ds_path = None
-        ds_name = dataset_destination
-        try:
-            ds_path = getattr(ctx.context, "dataset_path", None)
-        except Exception:
-            ds_path = None
-        if ds_name is None:
+        # Upload dataset only if not already present and we have path on first call
+        ds_name = dataset_destination or getattr(ctx.context, "dataset_filename", None)
+        ds_path = getattr(ctx.context, "dataset_path", None)
+        if ds_name:
+            # Check if file exists already in persistent sandbox
             try:
-                ds_name = getattr(ctx.context, "dataset_filename", None)
+                sandbox.process.exec(f"test -f {ds_name} || test -f {ws}/{ds_name} || false", cwd=ws, timeout=10)
+                already = True
             except Exception:
-                ds_name = None
-        if ds_path and ds_name:
-            with open(ds_path, "rb") as f:
-                sandbox.fs.upload_file(f.read(), f"{ws}/{ds_name}")
+                already = False
+            if not already and ds_path:
+                with open(ds_path, "rb") as f:
+                    sandbox.fs.upload_file(f.read(), f"{ws}/{ds_name}")
 
         # Upload requirements and install if provided
         if requirements and requirements.strip():
             sandbox.fs.upload_file(requirements.encode("utf-8"), f"{ws}/requirements.txt")
             sandbox.process.exec("pip install -r requirements.txt", cwd=ws, timeout=180)
 
+        # Diagnostics: ensure python available and list directory
+        try:
+            sandbox.process.exec("python --version || python3 --version", cwd=ws, timeout=30)
+            sandbox.process.exec("ls -la", cwd=ws, timeout=30)
+        except Exception:
+            pass
+
         # Run script
-        result = sandbox.process.exec(f"python {script_name}", cwd=ws, timeout=timeout)
+        # Run script (fallback to python3 if needed)
+        try:
+            result = sandbox.process.exec(f"python {script_name}", cwd=ws, timeout=timeout)
+        except Exception:
+            result = sandbox.process.exec(f"python3 {script_name}", cwd=ws, timeout=timeout)
         return f"exit_code={result.exit_code}\n{result.result}"
     finally:
         try:
