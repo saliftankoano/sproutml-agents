@@ -154,7 +154,18 @@ async def train_model(
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    return {"message": "SproutML Training API is running", "status": "healthy"}
+    import os
+    return {
+        "message": "SproutML Training API is running", 
+        "status": "healthy",
+        "port": os.getenv("PORT", "8000"),
+        "timestamp": pd.Timestamp.now().isoformat()
+    }
+
+@app.get("/health")
+async def health_check():
+    """Additional health check endpoint"""
+    return {"status": "ok", "service": "sproutml-api"}
 
 if __name__ == "__main__":
     import uvicorn
