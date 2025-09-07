@@ -116,7 +116,10 @@ def create_preprocessor_agent():
         name="Preprocessing Agent",
         handoff_description="Agent specializing in preprocessing datasets",
         instructions=preprocessing_agent_prompt,
-        tools=[CodeInterpreterTool(tool_config={"type": "code_interpreter"})]
+        tools=[CodeInterpreterTool(tool_config={
+            "type": "code_interpreter",
+            "container": {"type": "auto"}
+        })]
     )
 
 # Default preprocessor agent (for backwards compatibility)
