@@ -29,9 +29,6 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI(title="SproutML Training API", version="1.0.0")
 
-# Container management for persistent preprocessing sessions
-preprocessing_containers = {}
-
 # In-memory job store (in production, use Redis or database)
 job_store: Dict[str, Dict[str, Any]] = {}
 executor = ThreadPoolExecutor(max_workers=3)
@@ -49,24 +46,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-async def get_or_create_preprocessing_container(job_id: str):
-    """Get or create a persistent container for preprocessing job"""
-    if job_id not in preprocessing_containers:
-        # Create a new container for this job
-        # This would integrate with OpenAI's container management
-        preprocessing_containers[job_id] = {
-            "container_id": f"preprocessing_{job_id}",
-            "created_at": datetime.now().isoformat()
-        }
-    return preprocessing_containers[job_id]["container_id"]
+ 
 
-async def cleanup_preprocessing_container(job_id: str):
-    """Clean up container when job is complete"""
-    if job_id in preprocessing_containers:
-        # Clean up the container
-        del preprocessing_containers[job_id]
-
-async def process_training_job(job_id: str, training_request: str, temp_file_path: str, container_id: str):
+async def process_training_job(job_id: str, training_request: str, temp_file_path: str):
     """Process training job asynchronously"""
     try:
         # Update job status to processing
@@ -75,8 +57,8 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
         print(f"Starting training job {job_id}")
         
-        # Create preprocessor agent with persistent container
-        persistent_preprocessor = create_preprocessor_agent(container_id)
+        # Create preprocessor agent (stateless tool)
+        persistent_preprocessor = create_preprocessor_agent()
         
         # Create orchestrator with the persistent preprocessor
         job_orchestrator = Agent(
@@ -118,8 +100,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         except Exception as cleanup_error:
             print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
         
-        # Clean up preprocessing container
-        await cleanup_preprocessing_container(job_id)
+        # No container cleanup required
 
 async def test_orchestrator():
     """Test function for the orchestrator - can be used for debugging"""
@@ -129,20 +110,13 @@ async def test_orchestrator():
     except InputGuardrailTripwireTriggered as e:
         print("Guardrail blocked this input:", e)
 
-def create_preprocessor_agent(container_id: str = None):
-    """Create a preprocessing agent with optional persistent container"""
-    container_config = {"type": "auto"}
-    if container_id:
-        container_config = {"type": "persistent", "id": container_id}
-    
+def create_preprocessor_agent():
+    """Create a preprocessing agent with code interpreter (stateless)."""
     return Agent(
         name="Preprocessing Agent",
         handoff_description="Agent specializing in preprocessing datasets",
         instructions=preprocessing_agent_prompt,
-        tools=[CodeInterpreterTool(tool_config={
-            "type": "code_interpreter",
-            "container": container_config
-        })]
+        tools=[CodeInterpreterTool(tool_config={"type": "code_interpreter"})]
     )
 
 # Default preprocessor agent (for backwards compatibility)
@@ -225,11 +199,8 @@ async def train_model(
         5. Tune hyperparameters
         """
         
-        # Get or create persistent container for this job
-        container_id = await get_or_create_preprocessing_container(job_id)
-        
         # Start async processing (fire and forget)
-        asyncio.create_task(process_training_job(job_id, training_request, temp_file_path, container_id))
+        asyncio.create_task(process_training_job(job_id, training_request, temp_file_path))
         
         return {
             "status": "success",
