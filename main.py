@@ -1,5 +1,10 @@
-from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner
-from agents.exceptions import InputGuardrailTripwireTriggered
+# Try to import real agents module, fall back to mock if not available
+try:
+    from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner
+    from agents.exceptions import InputGuardrailTripwireTriggered
+except ImportError:
+    print("Warning: 'agents' module not found, using mock implementation")
+    from agents_mock import Agent, InputGuardrail, GuardrailFunctionOutput, Runner, InputGuardrailTripwireTriggered
 from dotenv import load_dotenv
 import asyncio
 import os
