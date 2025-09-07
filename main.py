@@ -9,7 +9,12 @@ import pandas as pd
 import io
 import tempfile
 import shutil
-from typing import Optional
+import uuid
+import json
+from datetime import datetime
+from typing import Optional, Dict, Any
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 """
 The agent needed are:
@@ -28,6 +33,10 @@ openai_key= os.getenv("OPENAI_API_KEY")
 # Initialize FastAPI app
 app = FastAPI(title="SproutML Training API", version="1.0.0")
 
+# In-memory job store (in production, use Redis or database)
+job_store: Dict[str, Dict[str, Any]] = {}
+executor = ThreadPoolExecutor(max_workers=3)
+
 # Add CORS middleware to allow frontend connections
 app.add_middleware(
     CORSMiddleware,
@@ -40,6 +49,48 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+async def process_training_job(job_id: str, training_request: str, temp_file_path: str):
+    """Process training job asynchronously"""
+    try:
+        # Update job status to processing
+        job_store[job_id]["status"] = "processing"
+        job_store[job_id]["updated_at"] = datetime.now().isoformat()
+        
+        print(f"Starting training job {job_id}")
+        
+        # Run the orchestrator agent with the training context
+        result = await Runner.run(orchestrator, training_request)
+        
+        # Update job with results
+        job_store[job_id].update({
+            "status": "completed",
+            "result": {
+                "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result)
+            },
+            "completed_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        })
+        
+        print(f"Training job {job_id} completed successfully")
+        
+    except Exception as e:
+        # Update job with error
+        job_store[job_id].update({
+            "status": "failed",
+            "error": str(e),
+            "updated_at": datetime.now().isoformat()
+        })
+        print(f"Training job {job_id} failed: {str(e)}")
+    
+    finally:
+        # Clean up temporary file
+        try:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+                print(f"Cleaned up temporary file: {temp_file_path}")
+        except Exception as cleanup_error:
+            print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
 
 async def test_orchestrator():
     """Test function for the orchestrator - can be used for debugging"""
@@ -85,19 +136,20 @@ async def train_model(
 ):
     """
     Train endpoint that receives a CSV file and target column to start the ML training process.
+    Returns immediately with a job ID for status tracking.
     
     Args:
         file: CSV file upload
         target_column: Name of the column to use as target variable
         
     Returns:
-        Training results and model information
+        Job ID for tracking training progress
     """
-    temp_dir = None
     try:
-        # Save uploaded file temporarily
+        # Generate unique job ID
+        job_id = str(uuid.uuid4())
         
-        # Create temporary directory (will be auto-cleaned on system reboot)
+        # Save uploaded file temporarily
         temp_dir = tempfile.mkdtemp(prefix="sproutml_")
         temp_file_path = os.path.join(temp_dir, file.filename)
         
@@ -105,7 +157,17 @@ async def train_model(
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Prepare context with file path instead of raw content
+        # Create job record
+        job_store[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "filename": file.filename,
+            "target_column": target_column,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        # Prepare training request
         training_request = f"""
         I have a machine learning training request:
         
@@ -122,29 +184,19 @@ async def train_model(
         5. Tune hyperparameters
         """
         
-        # Let the orchestrator and its agents handle everything
-        result = await Runner.run(orchestrator, training_request)
+        # Start async processing (fire and forget)
+        asyncio.create_task(process_training_job(job_id, training_request, temp_file_path))
         
         return {
             "status": "success",
-            "message": "Training request sent to orchestrator",
+            "message": "Training job queued successfully",
+            "job_id": job_id,
             "filename": file.filename,
-            "target_column": target_column,
-            "temp_file_path": temp_file_path,  # For debugging - remove in production
-            "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result)
+            "target_column": target_column
         }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
-    
-    finally:
-        # Clean up temporary files
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"Cleaned up temporary directory: {temp_dir}")
-            except Exception as cleanup_error:
-                print(f"Warning: Could not clean up {temp_dir}: {cleanup_error}")
 
 @app.get("/")
 async def root():
@@ -161,6 +213,19 @@ async def root():
 async def health_check():
     """Additional health check endpoint"""
     return {"status": "ok", "service": "sproutml-api"}
+
+@app.get("/job/{job_id}")
+async def get_job_status(job_id: str):
+    """Get the status of a training job"""
+    if job_id not in job_store:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return job_store[job_id]
+
+@app.get("/jobs")
+async def list_jobs():
+    """List all jobs (for debugging)"""
+    return {"jobs": list(job_store.values())}
 
 if __name__ == "__main__":
     import uvicorn
