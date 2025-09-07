@@ -1,4 +1,5 @@
-from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner, CodeInterpreterTool
+from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner, function_tool
+from agents.tool_context import ToolContext
 from agents.exceptions import InputGuardrailTripwireTriggered
 from dotenv import load_dotenv
 import asyncio
@@ -12,10 +13,11 @@ import shutil
 import uuid
 import json
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from prompts import orchestrator_prompt, preprocessing_agent_prompt
+from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
 """
 The agent needed are:
     1- Orchestator
@@ -28,6 +30,8 @@ load_dotenv()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI(title="SproutML Training API", version="1.0.0")
+DAYTONA_KEY = os.getenv("DAYTONA_API_KEY")
+daytona = Daytona(DaytonaConfig(api_key=DAYTONA_KEY))
 
 # In-memory job store (in production, use Redis or database)
 job_store: Dict[str, Dict[str, Any]] = {}
@@ -110,16 +114,76 @@ async def test_orchestrator():
     except InputGuardrailTripwireTriggered as e:
         print("Guardrail blocked this input:", e)
 
+@function_tool
+def daytona_run_script(
+    ctx: ToolContext,
+    script_name: str,
+    script: str,
+    requirements: Optional[str] = None,
+    dataset_destination: Optional[str] = None,
+    timeout: int = 300
+) -> str:
+    """Upload and run a Python script in a Daytona sandbox.
+
+    - script_name: filename to save (e.g., 'preprocess.py')
+    - script: full Python source code
+    - requirements: optional contents for requirements.txt (installed if provided)
+    - dataset_destination: filename to upload the current dataset as (defaults to context filename)
+    - timeout: seconds to allow the process to run
+
+    Returns combined stdout/stderr and exit_code as text.
+    """
+    sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
+    try:
+        # Ensure workspace exists implicitly by using paths under it
+        ws = "workspace"
+        # Upload script
+        sandbox.fs.upload_file(script.encode("utf-8"), f"{ws}/{script_name}")
+
+        # Upload dataset from server temp path if present
+        ds_path = None
+        ds_name = dataset_destination
+        try:
+            ds_path = getattr(ctx.context, "dataset_path", None)
+        except Exception:
+            ds_path = None
+        if ds_name is None:
+            try:
+                ds_name = getattr(ctx.context, "dataset_filename", None)
+            except Exception:
+                ds_name = None
+        if ds_path and ds_name:
+            with open(ds_path, "rb") as f:
+                sandbox.fs.upload_file(f.read(), f"{ws}/{ds_name}")
+
+        # Upload requirements and install if provided
+        if requirements and requirements.strip():
+            sandbox.fs.upload_file(requirements.encode("utf-8"), f"{ws}/requirements.txt")
+            sandbox.process.exec("pip install -r requirements.txt", cwd=ws, timeout=180)
+
+        # Run script
+        result = sandbox.process.exec(f"python {script_name}", cwd=ws, timeout=timeout)
+        return f"exit_code={result.exit_code}\n{result.result}"
+    finally:
+        try:
+            sandbox.delete()
+        except Exception:
+            pass
+
 def create_preprocessor_agent():
-    """Create a preprocessing agent with code interpreter (stateless)."""
+    """Create a preprocessing agent with Daytona execution tool."""
+    hint = (
+        "You must emit two files per step: '\n"
+        "- preprocess.py: Python code for ONLY the current step, reading from the dataset filename in your CWD (provided below) and writing outputs (e.g., preprocessed_stepN.csv).\n"
+        "- requirements.txt: only the extra pip dependencies needed for this step (if any).\n\n"
+        "Then call the 'daytona_run_script' tool with arguments: script_name='preprocess.py', script=<file contents>, requirements=<requirements.txt contents or ''>, dataset_destination=<dataset filename>.\n\n"
+        "Dataset filename to use in code is provided in context; assume it's in your working directory. Do not use absolute paths.\n\n"
+    )
     return Agent(
         name="Preprocessing Agent",
         handoff_description="Agent specializing in preprocessing datasets",
-        instructions=preprocessing_agent_prompt,
-        tools=[CodeInterpreterTool(tool_config={
-            "type": "code_interpreter",
-            "container": {"type": "auto"}
-        })]
+        instructions=hint + preprocessing_agent_prompt,
+        tools=[daytona_run_script],
     )
 
 # Default preprocessor agent (for backwards compatibility)
@@ -185,7 +249,7 @@ async def train_model(
             "updated_at": datetime.now().isoformat()
         }
         
-        # Prepare training request
+        # Prepare training request and pass dataset context for tools
         training_request = f"""
         I have a machine learning training request:
         
@@ -203,7 +267,12 @@ async def train_model(
         """
         
         # Start async processing (fire and forget)
-        asyncio.create_task(process_training_job(job_id, training_request, temp_file_path))
+        # Attach dataset info to context so daytona tool can upload it
+        tool_context = type("ToolCtx", (), {
+            "dataset_path": temp_file_path,
+            "dataset_filename": file.filename,
+        })()
+        asyncio.create_task(Runner.run(orchestrator, training_request, context=tool_context))
         
         return {
             "status": "success",
