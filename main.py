@@ -1,4 +1,4 @@
-from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner
+from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner, CodeInterpreterTool
 from agents.exceptions import InputGuardrailTripwireTriggered
 from dotenv import load_dotenv
 import asyncio
@@ -12,10 +12,10 @@ import shutil
 import uuid
 import json
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-
+from prompts import orchestrator_prompt, preprocessing_agent_prompt
 """
 The agent needed are:
     1- Orchestator
@@ -23,15 +23,14 @@ The agent needed are:
     3- Master trainer
     4- Evaluator
     5- Tuning
-
-Task 2: Use fastapi to make an api endpoint where the csv file can be transferred through 
-to kickstart the orchestrator agent.
 """
 load_dotenv()
-openai_key= os.getenv("OPENAI_API_KEY")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-# Initialize FastAPI app
 app = FastAPI(title="SproutML Training API", version="1.0.0")
+
+# Container management for persistent preprocessing sessions
+preprocessing_containers = {}
 
 # In-memory job store (in production, use Redis or database)
 job_store: Dict[str, Dict[str, Any]] = {}
@@ -50,7 +49,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-async def process_training_job(job_id: str, training_request: str, temp_file_path: str):
+async def get_or_create_preprocessing_container(job_id: str):
+    """Get or create a persistent container for preprocessing job"""
+    if job_id not in preprocessing_containers:
+        # Create a new container for this job
+        # This would integrate with OpenAI's container management
+        preprocessing_containers[job_id] = {
+            "container_id": f"preprocessing_{job_id}",
+            "created_at": datetime.now().isoformat()
+        }
+    return preprocessing_containers[job_id]["container_id"]
+
+async def cleanup_preprocessing_container(job_id: str):
+    """Clean up container when job is complete"""
+    if job_id in preprocessing_containers:
+        # Clean up the container
+        del preprocessing_containers[job_id]
+
+async def process_training_job(job_id: str, training_request: str, temp_file_path: str, container_id: str):
     """Process training job asynchronously"""
     try:
         # Update job status to processing
@@ -59,8 +75,18 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
         print(f"Starting training job {job_id}")
         
+        # Create preprocessor agent with persistent container
+        persistent_preprocessor = create_preprocessor_agent(container_id)
+        
+        # Create orchestrator with the persistent preprocessor
+        job_orchestrator = Agent(
+            name="Orchestrator Agent",
+            instructions=orchestrator_prompt,
+            handoffs=[persistent_preprocessor],
+        )
+        
         # Run the orchestrator agent with the training context
-        result = await Runner.run(orchestrator, training_request)
+        result = await Runner.run(job_orchestrator, training_request)
         
         # Update job with results
         job_store[job_id].update({
@@ -91,6 +117,9 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                 print(f"Cleaned up temporary file: {temp_file_path}")
         except Exception as cleanup_error:
             print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
+        
+        # Clean up preprocessing container
+        await cleanup_preprocessing_container(job_id)
 
 async def test_orchestrator():
     """Test function for the orchestrator - can be used for debugging"""
@@ -100,12 +129,24 @@ async def test_orchestrator():
     except InputGuardrailTripwireTriggered as e:
         print("Guardrail blocked this input:", e)
 
-# instructions, name, handoff_description completed ✅
-preprocessor_agent = Agent(
-    name="Preprocessing Agent",
-    handoff_description="Agent specializing in preprocessing datasets",
-    instructions="You're an expert in the data preprocessing for machine learning pipelines. You make graphs, stats, devise step by step plans, generate code you run by calling tools to help you with, save processed datasets and also provide an executive summary to allow other agents to continue the process.",
-)
+def create_preprocessor_agent(container_id: str = None):
+    """Create a preprocessing agent with optional persistent container"""
+    container_config = {"type": "auto"}
+    if container_id:
+        container_config = {"type": "persistent", "id": container_id}
+    
+    return Agent(
+        name="Preprocessing Agent",
+        handoff_description="Agent specializing in preprocessing datasets",
+        instructions=preprocessing_agent_prompt,
+        tools=[CodeInterpreterTool(tool_config={
+            "type": "code_interpreter",
+            "container": container_config
+        })]
+    )
+
+# Default preprocessor agent (for backwards compatibility)
+preprocessor_agent = create_preprocessor_agent()
 
 master_trainer_agent = Agent(
     name="Master training Agent",
@@ -125,7 +166,7 @@ tuning_agent = Agent(
 
 orchestrator = Agent(
     name="Orchestrator Agent",
-    instructions="You are an expert ML orchestrator, your only role is to own the end-to-end run of machine learning agentic architecture. Validate inputs, choose a plan, call downstream in the appropriate sequences to deliver the highest quality. Manage the entire pipeline to return trained models, results and an executive summary.",
+    instructions=orchestrator_prompt,
     handoffs=[preprocessor_agent],
 )
 
@@ -184,8 +225,11 @@ async def train_model(
         5. Tune hyperparameters
         """
         
+        # Get or create persistent container for this job
+        container_id = await get_or_create_preprocessing_container(job_id)
+        
         # Start async processing (fire and forget)
-        asyncio.create_task(process_training_job(job_id, training_request, temp_file_path))
+        asyncio.create_task(process_training_job(job_id, training_request, temp_file_path, container_id))
         
         return {
             "status": "success",
