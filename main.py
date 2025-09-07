@@ -1,5 +1,4 @@
-from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner
-from agents.tool import CodeInterpreterTool
+from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner, CodeInterpreterTool
 from agents.exceptions import InputGuardrailTripwireTriggered
 from dotenv import load_dotenv
 import asyncio
