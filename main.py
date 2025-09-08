@@ -231,7 +231,25 @@ def daytona_run_script(
             result = sandbox.process.exec(f"python {script_name}", cwd=ws, timeout=timeout)
         except Exception:
             result = sandbox.process.exec(f"python3 {script_name}", cwd=ws, timeout=timeout)
-        return f"exit_code={result.exit_code}\n{result.result}"
+
+        # Summarize workspace outputs for the agent to advance steps deterministically
+        latest_csv = None
+        try:
+            lst = sandbox.process.exec("ls -1", cwd=ws, timeout=20).result
+            latest = sandbox.process.exec("sh -lc 'ls -1t preprocessed_step*.csv 2>/dev/null | head -1'", cwd=ws, timeout=20).result.strip()
+            latest_csv = latest if latest else None
+        except Exception:
+            lst = ""
+
+        payload = {
+            "exit_code": result.exit_code,
+            "output": result.result,
+            "workspace": ws,
+            "files": lst.splitlines() if lst else [],
+            "latest_csv": latest_csv,
+        }
+        import json as _json
+        return _json.dumps(payload)
     finally:
         # Do not delete the persistent sandbox; retain for multi-step run & user inspection
         if not (job_id and job_id in persistent_sandboxes):
