@@ -13,6 +13,7 @@ import shutil
 import uuid
 import json
 from datetime import datetime
+import base64
 from typing import Dict, Any, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -74,6 +75,13 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         )
         sandbox = daytona.create(params)
         persistent_sandboxes[job_id] = sandbox
+        # Record infrastructure details for later inspection/download
+        job_store[job_id]["daytona"] = {
+            "volume_id": getattr(volume, "id", None),
+            "sandbox_id": getattr(sandbox, "id", None),
+            "workspace": "/home/daytona/volume/workspace",
+            "retain": True,
+        }
         # Use the mounted volume as the working directory so files persist and are visible
         ws = "/home/daytona/volume/workspace"
         try:
@@ -105,7 +113,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             dataset_filename=os.path.basename(temp_file_path),
             dataset_path=temp_file_path,
         )
-        result = await Runner.run(job_orchestrator, training_request, context=tool_context)
+        result = await Runner.run(job_orchestrator, training_request, context=tool_context, max_turns=50)
         
         # Update job with results
         job_store[job_id].update({
@@ -137,19 +145,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         except Exception as cleanup_error:
             print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
         
-        # Delete persistent sandbox and volume
-        sb = persistent_sandboxes.pop(job_id, None)
-        if sb is not None:
-            try:
-                sb.delete()
-            except Exception:
-                pass
-        vol = persistent_volumes.pop(job_id, None)
-        if vol is not None:
-            try:
-                daytona.volume.delete(vol)
-            except Exception:
-                pass
+        # Retain sandbox/volume for user inspection; cleanup can be triggered via a separate endpoint
 
 async def test_orchestrator():
     """Test function for the orchestrator - can be used for debugging"""
@@ -230,7 +226,6 @@ def daytona_run_script(
         except Exception:
             pass
 
-        # Run script
         # Run script (fallback to python3 if needed)
         try:
             result = sandbox.process.exec(f"python {script_name}", cwd=ws, timeout=timeout)
@@ -238,10 +233,13 @@ def daytona_run_script(
             result = sandbox.process.exec(f"python3 {script_name}", cwd=ws, timeout=timeout)
         return f"exit_code={result.exit_code}\n{result.result}"
     finally:
-        try:
-            sandbox.delete()
-        except Exception:
-            pass
+        # Do not delete the persistent sandbox; retain for multi-step run & user inspection
+        if not (job_id and job_id in persistent_sandboxes):
+            # Only clean up ad-hoc sandboxes created for missing job mapping
+            try:
+                sandbox.delete()
+            except Exception:
+                pass
 
 def create_preprocessor_agent():
     """Create a preprocessing agent with Daytona execution tool."""
