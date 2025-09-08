@@ -410,15 +410,18 @@ async def list_job_artifacts(job_id: str):
         raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
     ws = job_store.get(job_id, {}).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
     try:
-        listing = sandbox.process.exec("pwd && ls -la && echo '---' && ls -1", cwd=ws, timeout=30)
+        listing = sandbox.process.exec("pwd && ls -la", cwd=ws, timeout=30)
+        files_plain = sandbox.process.exec("ls -1", cwd=ws, timeout=20).result
         latest = sandbox.process.exec(
             "sh -lc 'ls -1t preprocessed_step*.csv 2>/dev/null | head -1'", cwd=ws, timeout=20
         ).result.strip()
+        files_list = [f for f in (files_plain or "").split("\n") if f.strip()]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list artifacts: {e}")
     return JSONResponse({
         "workspace": ws,
         "listing": listing.result,
+        "files": files_list,
         "latest_csv": latest or None,
         "daytona": job_store.get(job_id, {}).get("daytona", {}),
     })
