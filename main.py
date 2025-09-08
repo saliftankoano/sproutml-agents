@@ -117,17 +117,51 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             dataset_path=temp_file_path,
         )
         result = await Runner.run(job_orchestrator, training_request, context=tool_context, max_turns=50)
-        
-        # Update job with results
+
+        # Auto-loop: orchestrator drives the next steps using the last produced CSV
+        def _extract_step(json_text: str) -> tuple[str | None, dict[str, Any] | None]:
+            try:
+                data = json.loads(json_text)
+                if isinstance(data, dict) and "output_csv" in data:
+                    return data.get("output_csv"), data
+            except Exception:
+                pass
+            try:
+                start = json_text.find("{")
+                end = json_text.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    data = json.loads(json_text[start : end + 1])
+                    if isinstance(data, dict) and "output_csv" in data:
+                        return data.get("output_csv"), data
+            except Exception:
+                return None, None
+            return None, None
+
+        current_csv = os.path.basename(temp_file_path)
+        out_csv, _ = _extract_step(str(getattr(result, "final_output", "")))
+        visited = set()
+        max_steps = 50
+        while out_csv and out_csv not in visited and out_csv != current_csv and len(visited) < max_steps:
+            visited.add(out_csv)
+            current_csv = out_csv
+            tool_context.dataset_filename = current_csv
+            loop_input = (
+                f"Continue preprocessing automatically using input CSV '{current_csv}'. "
+                f"Do not ask for confirmation; produce only the JSON contract for this step."
+            )
+            result = await Runner.run(job_orchestrator, loop_input, context=tool_context, max_turns=50)
+            out_csv, _ = _extract_step(str(getattr(result, "final_output", "")))
+
+        # Update job with results after loop
         job_store[job_id].update({
             "status": "completed",
             "result": {
-                "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result)
+                "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result),
+                "final_input_csv": current_csv,
             },
             "completed_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
         })
-        
         print(f"Training job {job_id} completed successfully")
         
     except Exception as e:
