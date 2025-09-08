@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import asyncio
 import os
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
@@ -14,6 +15,8 @@ import uuid
 import json
 from datetime import datetime
 import base64
+import mimetypes
+import shlex
 from typing import Dict, Any, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -397,6 +400,54 @@ async def get_job_status(job_id: str):
 async def list_jobs():
     """List all jobs (for debugging)"""
     return {"jobs": list(job_store.values())}
+
+@app.get("/job/{job_id}/artifacts")
+async def list_job_artifacts(job_id: str):
+    if job_id not in job_store:
+        raise HTTPException(status_code=404, detail="Job not found")
+    sandbox = persistent_sandboxes.get(job_id)
+    if sandbox is None:
+        raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
+    ws = job_store.get(job_id, {}).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
+    try:
+        listing = sandbox.process.exec("pwd && ls -la && echo '---' && ls -1", cwd=ws, timeout=30)
+        latest = sandbox.process.exec(
+            "sh -lc 'ls -1t preprocessed_step*.csv 2>/dev/null | head -1'", cwd=ws, timeout=20
+        ).result.strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list artifacts: {e}")
+    return JSONResponse({
+        "workspace": ws,
+        "listing": listing.result,
+        "latest_csv": latest or None,
+        "daytona": job_store.get(job_id, {}).get("daytona", {}),
+    })
+
+@app.get("/job/{job_id}/artifact/{filename:path}")
+async def download_job_artifact(job_id: str, filename: str):
+    if job_id not in job_store:
+        raise HTTPException(status_code=404, detail="Job not found")
+    sandbox = persistent_sandboxes.get(job_id)
+    if sandbox is None:
+        raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
+    ws = job_store.get(job_id, {}).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
+    remote_path = f"{ws}/{filename}"
+    try:
+        content_bytes = None
+        if hasattr(sandbox, "fs") and hasattr(sandbox.fs, "download_file"):
+            content_bytes = sandbox.fs.download_file(remote_path)
+        else:
+            encoded = sandbox.process.exec(
+                f"sh -lc 'base64 -w 0 {shlex.quote(remote_path)}'", cwd="/", timeout=120
+            ).result.strip()
+            content_bytes = base64.b64decode(encoded)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"File not found or unreadable: {e}")
+    media_type, _ = mimetypes.guess_type(filename)
+    media_type = media_type or "application/octet-stream"
+    return StreamingResponse(io.BytesIO(content_bytes), media_type=media_type, headers={
+        "Content-Disposition": f"attachment; filename={os.path.basename(filename)}"
+    })
 
 if __name__ == "__main__":
     import uvicorn
