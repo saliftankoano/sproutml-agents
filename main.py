@@ -99,8 +99,12 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             handoffs=[persistent_preprocessor],
         )
         
-        # Run the orchestrator agent with the training context
-        tool_context = SimpleNamespace(job_id=job_id, dataset_filename=os.path.basename(temp_file_path))
+        # Run the orchestrator agent with the training context (include dataset_path so tool can self-heal)
+        tool_context = SimpleNamespace(
+            job_id=job_id,
+            dataset_filename=os.path.basename(temp_file_path),
+            dataset_path=temp_file_path,
+        )
         result = await Runner.run(job_orchestrator, training_request, context=tool_context)
         
         # Update job with results
@@ -335,13 +339,8 @@ async def train_model(
         5. Tune hyperparameters
         """
         
-        # Start async processing (fire and forget)
-        # Attach dataset info to context so daytona tool can upload it
-        tool_context = type("ToolCtx", (), {
-            "dataset_path": temp_file_path,
-            "dataset_filename": file.filename,
-        })()
-        asyncio.create_task(Runner.run(orchestrator, training_request, context=tool_context))
+        # Start async processing (fire and forget) using persistent sandbox + volume
+        asyncio.create_task(process_training_job(job_id, training_request, temp_file_path))
         
         return {
             "status": "success",
