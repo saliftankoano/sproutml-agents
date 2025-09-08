@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from prompts import orchestrator_prompt, preprocessing_agent_prompt
-from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
+from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams, VolumeMount
 from types import SimpleNamespace
 """
 The agent needed are:
@@ -33,8 +33,9 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 app = FastAPI(title="SproutML Training API", version="1.0.0")
 DAYTONA_KEY = os.getenv("DAYTONA_API_KEY")
 daytona = Daytona(DaytonaConfig(api_key=DAYTONA_KEY))
-# Track a persistent sandbox per job
+# Track a persistent sandbox/volume per job
 persistent_sandboxes: Dict[str, Any] = {}
+persistent_volumes: Dict[str, Any] = {}
 
 # In-memory job store (in production, use Redis or database)
 job_store: Dict[str, Dict[str, Any]] = {}
@@ -64,16 +65,29 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
         print(f"Starting training job {job_id}")
         
-        # Create persistent sandbox and upload dataset once
-        sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
+        # Create/get a persistent volume for this job and mount it to the sandbox
+        volume = daytona.volume.get(f"sproutml-job-{job_id}", create=True)
+        persistent_volumes[job_id] = volume
+        params = CreateSandboxFromSnapshotParams(
+            language="python",
+            volumes=[VolumeMount(volumeId=volume.id, mountPath="/home/daytona/volume")],
+        )
+        sandbox = daytona.create(params)
         persistent_sandboxes[job_id] = sandbox
-        ws = "workspace"
+        # Use the mounted volume as the working directory so files persist and are visible
+        ws = "/home/daytona/volume/workspace"
         try:
-            sandbox.process.exec("mkdir -p workspace", cwd=".", timeout=30)
+            sandbox.process.exec(f"mkdir -p {ws}", cwd=".", timeout=30)
         except Exception:
             pass
+        # Upload the dataset into the volume path and log
         with open(temp_file_path, "rb") as f:
             sandbox.fs.upload_file(f.read(), f"{ws}/{os.path.basename(temp_file_path)}")
+        try:
+            listing = sandbox.process.exec("pwd && ls -la", cwd=ws, timeout=30)
+            print(f"[Daytona] After dataset upload, workspace listing for job {job_id}:\n{listing.result}")
+        except Exception as e:
+            print(f"[Daytona] Listing failed for job {job_id}: {e}")
 
         # Create preprocessor agent (stateless tool)
         persistent_preprocessor = create_preprocessor_agent()
@@ -119,11 +133,17 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         except Exception as cleanup_error:
             print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
         
-        # Delete persistent sandbox
+        # Delete persistent sandbox and volume
         sb = persistent_sandboxes.pop(job_id, None)
         if sb is not None:
             try:
                 sb.delete()
+            except Exception:
+                pass
+        vol = persistent_volumes.pop(job_id, None)
+        if vol is not None:
+            try:
+                daytona.volume.delete(vol)
             except Exception:
                 pass
 
@@ -159,12 +179,22 @@ def daytona_run_script(
     if job_id and job_id in persistent_sandboxes:
         sandbox = persistent_sandboxes[job_id]
     else:
-        sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
+        # Create ad-hoc sandbox mounted to the job's volume if present
+        if job_id and job_id in persistent_volumes:
+            volume = persistent_volumes[job_id]
+            params = CreateSandboxFromSnapshotParams(
+                language="python",
+                volumes=[VolumeMount(volumeId=volume.id, mountPath="/home/daytona/volume")],
+            )
+            sandbox = daytona.create(params)
+        else:
+            sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
     try:
         # Ensure workspace exists and is usable
-        ws = "workspace"
+        # Workspace on the mounted volume
+        ws = "/home/daytona/volume/workspace"
         try:
-            sandbox.process.exec("mkdir -p workspace", cwd=".", timeout=30)
+            sandbox.process.exec(f"mkdir -p {ws}", cwd=".", timeout=30)
         except Exception:
             pass
         # Upload script
@@ -192,7 +222,7 @@ def daytona_run_script(
         # Diagnostics: ensure python available and list directory
         try:
             sandbox.process.exec("python --version || python3 --version", cwd=ws, timeout=30)
-            sandbox.process.exec("ls -la", cwd=ws, timeout=30)
+            sandbox.process.exec("pwd && ls -la", cwd=ws, timeout=30)
         except Exception:
             pass
 
