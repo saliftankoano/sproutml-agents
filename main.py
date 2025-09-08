@@ -157,7 +157,8 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             handoff_request = (
                 f"Hand off to preprocessing agent for step {step_num}. "
                 f"Current dataset: '{current_csv}'. "
-                f"The preprocessing agent should execute step {step_num} of the preprocessing plan. "
+                f"The preprocessing agent should analyze the current dataset and execute the next logical preprocessing step. "
+                f"If this is step 1, do initial analysis and planning. If this is a later step, analyze the current data state and continue preprocessing. "
                 f"Return the structured JSON result with output_csv for the next iteration."
             )
             
