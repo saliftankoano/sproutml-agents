@@ -118,7 +118,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         )
         result = await Runner.run(job_orchestrator, training_request, context=tool_context, max_turns=50)
 
-        # Auto-loop: orchestrator drives the next steps using the last produced CSV
+        # Handoff-based preprocessing loop: orchestrator explicitly hands off to preprocessing agent for each step
         def _extract_step(json_text: str) -> tuple[str | None, dict[str, Any] | None]:
             try:
                 data = json.loads(json_text)
@@ -138,19 +138,38 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             return None, None
 
         current_csv = os.path.basename(temp_file_path)
-        out_csv, _ = _extract_step(str(getattr(result, "final_output", "")))
-        visited = set()
-        max_steps = 50
-        while out_csv and out_csv not in visited and out_csv != current_csv and len(visited) < max_steps:
-            visited.add(out_csv)
+        step_num = 1
+        max_steps = 10
+        step_results = []
+        
+        # Initial step result
+        initial_output = str(getattr(result, "final_output", ""))
+        step_results.append(f"Initial: {initial_output}")
+        
+        out_csv, _ = _extract_step(initial_output)
+        
+        while out_csv and out_csv != current_csv and step_num <= max_steps:
             current_csv = out_csv
             tool_context.dataset_filename = current_csv
-            loop_input = (
-                f"Continue preprocessing automatically using input CSV '{current_csv}'. "
-                f"Do not ask for confirmation; produce only the JSON contract for this step."
+            step_num += 1
+            
+            # Orchestrator explicitly hands off to preprocessing agent for this step
+            handoff_request = (
+                f"Hand off to preprocessing agent for step {step_num}. "
+                f"Current dataset: '{current_csv}'. "
+                f"The preprocessing agent should execute step {step_num} of the preprocessing plan. "
+                f"Return the structured JSON result with output_csv for the next iteration."
             )
-            result = await Runner.run(job_orchestrator, loop_input, context=tool_context, max_turns=50)
-            out_csv, _ = _extract_step(str(getattr(result, "final_output", "")))
+            
+            result = await Runner.run(job_orchestrator, handoff_request, context=tool_context, max_turns=50)
+            step_output = str(getattr(result, "final_output", ""))
+            step_results.append(f"Step {step_num}: {step_output}")
+            
+            out_csv, _ = _extract_step(step_output)
+            
+            if not out_csv:
+                print(f"Step {step_num}: No output_csv found. Stopping preprocessing.")
+                break
 
         # Update job with results after loop
         job_store[job_id].update({
@@ -158,6 +177,8 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             "result": {
                 "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result),
                 "final_input_csv": current_csv,
+                "step_results": step_results,
+                "total_steps": step_num,
             },
             "completed_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
