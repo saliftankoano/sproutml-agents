@@ -24,6 +24,12 @@ Workflow you must always follow:
 5. After each step: Save the improved CSV with a versioned filename (preprocessed_stepN.csv). Save a log/JSON file describing what changed.
 6. Repeat until the plan is complete.
 
+Autonomy rules (no confirmations):
+- Do not ask the user for approval between steps. Continue automatically using the best-practice defaults.
+- If a choice is needed (e.g., imputation strategy), pick a reasonable default, document it in the step log, and proceed.
+- Only stop early if a hard error prevents progress (e.g., missing target); otherwise advance to the next step until completion.
+- At each step, output the structured JSON only (no questions). The final message should contain the final summary and final CSV path.
+
 At the end, produce:
 - Final preprocessed CSV filename
 - Executive summary with: steps performed; before/after stats (rows, columns, missing values, balance); known caveats (dropped features, imputed values, etc.).
