@@ -22,6 +22,7 @@ from prompts import orchestrator_prompt, preprocessing_agent_prompt
 from daytona import Sandbox
 from types import SimpleNamespace
 from config import DAYTONA_KEY, OPENAI_KEY, ALLOW_ORIGINS, ALLOW_METHODS, ALLOW_HEADERS
+from services.agent_service import create_preprocessor_agent, create_orchestrator_agent
 from services.job_service import create_job, update_job_status, get_job, list_jobs
 from services.daytona_service import create_volume, get_volume, delete_volume, create_sandbox, get_sandbox, delete_sandbox, persistent_sandboxes, persistent_volumes, get_persistent_sandbox, get_persistent_volume
 """
@@ -50,8 +51,6 @@ app.add_middleware(
     allow_methods=ALLOW_METHODS,
     allow_headers=ALLOW_HEADERS,
 )
-
- 
 
 async def process_training_job(job_id: str, training_request: str, temp_file_path: str):
     """Create a persistent Daytona sandbox per job, upload dataset, run, then clean up."""
@@ -92,13 +91,10 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
 
         # Create preprocessor agent (stateless tool)
         persistent_preprocessor = create_preprocessor_agent()
+        orchestrator = create_orchestrator_agent()
         
         # Create orchestrator with the persistent preprocessor
-        job_orchestrator = Agent(
-            name="Orchestrator Agent",
-            instructions=orchestrator_prompt,
-            handoffs=[persistent_preprocessor],
-        )
+        job_orchestrator = orchestrator
         
         # Run the orchestrator agent with the training context (include dataset_path so tool can self-heal)
         tool_context = SimpleNamespace(
@@ -194,155 +190,9 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         except Exception as cleanup_error:
             print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
         
-        # Retain sandbox/volume for user inspection; cleanup can be triggered via a separate endpoint
-
-@function_tool
-def daytona_run_script(
-    ctx: ToolContext,
-    script_name: str,
-    script: str,
-    requirements: Optional[str] = None,
-    dataset_destination: Optional[str] = None,
-    timeout: int = 300
-) -> str:
-    """Upload and run a Python script in a Daytona sandbox.
-
-    - script_name: filename to save (e.g., 'preprocess.py')
-    - script: full Python source code
-    - requirements: optional contents for requirements.txt (installed if provided)
-    - dataset_destination: filename to upload the current dataset as (defaults to context filename)
-    - timeout: seconds to allow the process to run
-
-    Returns combined stdout/stderr and exit_code as text.
-    """
-    job_id = getattr(ctx.context, "job_id", None)
-    sandbox: Sandbox | None = None
-    if job_id and job_id in persistent_sandboxes:
-        sandbox = persistent_sandboxes[job_id]
-    else:
-        # Create ad-hoc sandbox mounted to the job's volume if present
-        if job_id and job_id in persistent_volumes:
-            sandbox = get_persistent_sandbox(job_id)
-            if sandbox is None:
-                sandbox = create_sandbox(job_id)
-            persistent_sandboxes[job_id] = sandbox
-        else:
-            sandbox = get_persistent_sandbox(job_id)
-            if sandbox is None:
-                sandbox = create_sandbox(job_id)
-            persistent_sandboxes[job_id] = sandbox
-    if sandbox is None:
-        raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
-    try:
-        # Ensure workspace exists and is usable
-        # Workspace on the mounted volume
-        ws = "/home/daytona/volume/workspace"
-        try:
-            sandbox.process.exec(f"mkdir -p {ws}", cwd=".", timeout=30)
-        except Exception:
-            pass
-        # Upload script
-        sandbox.fs.upload_file(script.encode("utf-8"), f"{ws}/{script_name}")
-
-        # Upload dataset only if not already present and we have path on first call
-        ds_name = dataset_destination or getattr(ctx.context, "dataset_filename", None)
-        ds_path = getattr(ctx.context, "dataset_path", None)
-        if ds_name:
-            # Check if file exists already in persistent sandbox
-            try:
-                sandbox.process.exec(f"test -f {ds_name} || test -f {ws}/{ds_name} || false", cwd=ws, timeout=10)
-                already = True
-            except Exception:
-                already = False
-            if not already and ds_path:
-                with open(ds_path, "rb") as f:
-                    sandbox.fs.upload_file(f.read(), f"{ws}/{ds_name}")
-
-        # Upload requirements and install if provided
-        if requirements and requirements.strip():
-            sandbox.fs.upload_file(requirements.encode("utf-8"), f"{ws}/requirements.txt")
-            sandbox.process.exec("pip install -r requirements.txt", cwd=ws, timeout=180)
-
-        # Diagnostics: ensure python available and list directory
-        try:
-            sandbox.process.exec("python --version || python3 --version", cwd=ws, timeout=30)
-            sandbox.process.exec("pwd && ls -la", cwd=ws, timeout=30)
-        except Exception:
-            pass
-
-        # Run script (fallback to python3 if needed)
-        try:
-            result = sandbox.process.exec(f"python {script_name}", cwd=ws, timeout=timeout)
-        except Exception:
-            result = sandbox.process.exec(f"python3 {script_name}", cwd=ws, timeout=timeout)
-
-        # Summarize workspace outputs for the agent to advance steps deterministically
-        latest_csv = None
-        try:
-            lst = sandbox.process.exec("ls -1", cwd=ws, timeout=20).result
-            latest = sandbox.process.exec("sh -lc 'ls -1t preprocessed_step*.csv 2>/dev/null | head -1'", cwd=ws, timeout=20).result.strip()
-            latest_csv = latest if latest else None
-        except Exception:
-            lst = ""
-
-        payload = {
-            "exit_code": result.exit_code,
-            "output": result.result,
-            "workspace": ws,
-            "files": lst.splitlines() if lst else [],
-            "latest_csv": latest_csv,
-        }
-        import json as _json
-        return _json.dumps(payload)
-    finally:
-        # Do not delete the persistent sandbox; retain for multi-step run & user inspection
-        if not (job_id and job_id in persistent_sandboxes):
-            # Only clean up ad-hoc sandboxes created for missing job mapping
-            try:
-                sandbox.delete()
-            except Exception:
-                pass
-
-def create_preprocessor_agent():
-    """Create a preprocessing agent with Daytona execution tool."""
-    hint = (
-        "You must emit two files per step: '\n"
-        "- preprocess.py: Python code for ONLY the current step, reading from the dataset filename in your CWD (provided below) and writing outputs (e.g., preprocessed_stepN.csv).\n"
-        "- requirements.txt: only the extra pip dependencies needed for this step (if any).\n\n"
-        "Then call the 'daytona_run_script' tool with arguments: script_name='preprocess.py', script=<file contents>, requirements=<requirements.txt contents or ''>, dataset_destination=<dataset filename>.\n\n"
-        "Dataset filename to use in code is provided in context; assume it's in your working directory. Do not use absolute paths.\n\n"
-    )
-    return Agent(
-        name="Preprocessing Agent",
-        handoff_description="Agent specializing in preprocessing datasets",
-        instructions=hint + preprocessing_agent_prompt,
-        tools=[daytona_run_script],
-    )
-
 # Default preprocessor agent (for backwards compatibility)
 preprocessor_agent = create_preprocessor_agent()
-
-master_trainer_agent = Agent(
-    name="Master training Agent",
-    instructions="You determine which agent to use based on the user's homework question",
-)
-
-evaluator_agent = Agent(
-    name="Evaluator Agent",
-    instructions="You determine which agent to use based on the user's homework question",
-
-)
-
-tuning_agent = Agent(
-    name="Tuning Agent",
-    instructions="You determine which agent to use based on the user's homework question",
-)
-
-orchestrator = Agent(
-    name="Orchestrator Agent",
-    instructions=orchestrator_prompt,
-    handoffs=[preprocessor_agent],
-)
+orchestrator = create_orchestrator_agent()
 
 @app.post("/train")
 async def train_model(
@@ -437,7 +287,7 @@ async def list_jobs():
 async def list_job_artifacts(job_id: str):
     if get_job(job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    sandbox = persistent_sandboxes.get(job_id)
+    sandbox = get_persistent_sandbox(job_id)
     if sandbox is None:
         raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
     ws = get_job(job_id).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
@@ -462,7 +312,7 @@ async def list_job_artifacts(job_id: str):
 async def download_job_artifact(job_id: str, filename: str):
     if get_job(job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    sandbox = persistent_sandboxes.get(job_id)
+    sandbox = get_persistent_sandbox(job_id)
     if sandbox is None:
         raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
     ws = get_job(job_id).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
