@@ -17,6 +17,27 @@ def create_volume(job_id: str):
         print(f"Error creating volume for job {job_id}: {e}")
         return None
 
+def wait_for_volume_ready(job_id: str, max_wait_time: int = 60):
+    """Wait for volume to be in ready state"""
+    import time
+    start_time = time.time()
+    
+    while time.time() - start_time < max_wait_time:
+        try:
+            volume = daytona.volume.get(f"sproutml-job-{job_id}")
+            if hasattr(volume, 'state') and volume.state == 'ready':
+                return volume
+            elif hasattr(volume, 'status') and volume.status == 'ready':
+                return volume
+            print(f"Volume {job_id} not ready yet, waiting...")
+            time.sleep(2)
+        except Exception as e:
+            print(f"Error checking volume status for job {job_id}: {e}")
+            time.sleep(2)
+    
+    print(f"Volume {job_id} did not become ready within {max_wait_time} seconds")
+    return None
+
 def get_volume(job_id: str):
     try:
         volume = daytona.volume.get(f"sproutml-job-{job_id}")

@@ -1,4 +1,4 @@
-from services.daytona_service import get_persistent_volume, create_volume, get_persistent_sandbox, create_sandbox
+from services.daytona_service import get_persistent_volume, create_volume, get_persistent_sandbox, create_sandbox, wait_for_volume_ready
 from services.job_service import update_job_status
 from services.agent_service import create_preprocessor_agent, create_orchestrator_agent
 from agents import Runner
@@ -20,6 +20,13 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         volume = get_persistent_volume(job_id)
         if volume is None:
             volume = create_volume(job_id)
+            if volume is not None:
+                # Wait for volume to be ready before creating sandbox
+                volume = wait_for_volume_ready(job_id)
+        
+        if volume is None:
+            raise Exception("Failed to create or get ready volume for job")
+            
         sandbox = get_persistent_sandbox(job_id)
         if sandbox is None:
             sandbox = create_sandbox(job_id)
