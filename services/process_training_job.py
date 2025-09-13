@@ -24,12 +24,11 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         if sandbox is None:
             sandbox = create_sandbox(job_id)
         # Record infrastructure details for later inspection/download
-        update_job_status(job_id, "daytona", {
-            "volume_id": getattr(volume, "id", None),
-            "sandbox_id": getattr(sandbox, "id", None),
-            "workspace": "/home/daytona/volume/workspace",
-            "retain": True,
-        })
+        update_job_status(job_id, "daytona", datetime.now().isoformat(),
+                         volume_id=getattr(volume, "id", None),
+                         sandbox_id=getattr(sandbox, "id", None),
+                         workspace="/home/daytona/volume/workspace",
+                         retain=True)
         # Use the mounted volume as the working directory so files persist and are visible
         ws = "/home/daytona/volume/workspace"
         try:
@@ -115,26 +114,24 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                 break
 
         # Update job with results after loop
-        update_job_status(job_id, "completed", datetime.now().isoformat(), {
-            "status": "completed",
-            "result": {
-                "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result),
-                "final_input_csv": current_csv,
-                "step_results": step_results,
-                "total_steps": step_num,
-            },
-            "completed_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        })
+        update_job_status(job_id, "completed", datetime.now().isoformat(),
+                         status="completed",
+                         result={
+                             "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result),
+                             "final_input_csv": current_csv,
+                             "step_results": step_results,
+                             "total_steps": step_num,
+                         },
+                         completed_at=datetime.now().isoformat(),
+                         updated_at=datetime.now().isoformat())
         print(f"Training job {job_id} completed successfully")
         
     except Exception as e:
         # Update job with error
-        update_job_status(job_id, "failed", datetime.now().isoformat(), {
-            "status": "failed",
-            "error": str(e),
-            "updated_at": datetime.now().isoformat()
-        })
+        update_job_status(job_id, "failed", datetime.now().isoformat(), 
+                         status="failed",
+                         error=str(e),
+                         updated_at=datetime.now().isoformat())
         print(f"Training job {job_id} failed: {str(e)}")
     
     finally:
