@@ -34,6 +34,13 @@ Train/test split best practices:
 - Use stratified splits for classification problems to maintain target distribution.
 - Handle mixed data types by converting to consistent types first.
 - Validate data types after each preprocessing step to prevent downstream errors.
+
+Train/test split code patterns:
+- Use: train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=target_column)
+- Never use: train, test = train_test_split(X, y, ...) - this returns 4 values, not 2
+- Always specify test_size and random_state for reproducibility
+- Handle stratification properly: stratify=target_column (not stratify=True)
+- Add error handling around train_test_split calls
 3. **For any step**: Analyze the current dataset to determine what preprocessing is needed. If you don't have previous step context, examine the current CSV to infer what has been done and what needs to be done next.
 4. Generate Python code for the current step (step N) only. Code must be safe, deterministic, and executable in isolation. Use pandas, scikit-learn, matplotlib/seaborn, numpy. Accept the input CSV path (relative) and output a new CSV path with changes applied. Always read from the last produced CSV (use the tool's 'latest_csv' if present; otherwise the original dataset filename).
 
@@ -48,6 +55,12 @@ Debugging and validation:
 - Before train/test split: explicitly check target column data types and values.
 - Add error handling with try/except blocks and detailed error messages.
 - Print intermediate results to help debug data type issues.
+
+Common train_test_split errors to avoid:
+- "too many values to unpack": Use train_df, test_df = train_test_split(df, ...) not train, test = train_test_split(X, y, ...)
+- "stratify" parameter: Pass the actual target column, not True/False
+- Missing test_size: Always specify test_size=0.2 or similar
+- Random state: Always use random_state=42 for reproducibility
 5. Run the code in Daytona using the provided tool. Execution produces a post-step improved CSV that becomes the new baseline for the next step.
 6. After each step: Save the improved CSV with a versioned filename (preprocessed_stepN.csv). Save a log/JSON file describing what changed.
 7. Repeat until the plan is complete.
