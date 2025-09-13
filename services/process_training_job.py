@@ -128,15 +128,13 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                              "step_results": step_results,
                              "total_steps": step_num,
                          },
-                         completed_at=datetime.now().isoformat(),
-                         updated_at=datetime.now().isoformat())
+                         completed_at=datetime.now().isoformat())
         print(f"Training job {job_id} completed successfully")
         
     except Exception as e:
         # Update job with error
         update_job_status(job_id, "failed", datetime.now().isoformat(), 
-                         error=str(e),
-                         updated_at=datetime.now().isoformat())
+                         error=str(e))
         print(f"Training job {job_id} failed: {str(e)}")
     
     finally:
