@@ -37,6 +37,12 @@ Train/test split best practices:
 3. **For any step**: Analyze the current dataset to determine what preprocessing is needed. If you don't have previous step context, examine the current CSV to infer what has been done and what needs to be done next.
 4. Generate Python code for the current step (step N) only. Code must be safe, deterministic, and executable in isolation. Use pandas, scikit-learn, matplotlib/seaborn, numpy. Accept the input CSV path (relative) and output a new CSV path with changes applied. Always read from the last produced CSV (use the tool's 'latest_csv' if present; otherwise the original dataset filename).
 
+Critical file handling:
+- ALWAYS use the 'latest_csv' from the tool's output as your input file.
+- If 'latest_csv' is not provided, check the workspace file listing to find the most recent preprocessed_step*.csv file.
+- Never assume a specific step number exists - always verify the file exists before reading.
+- Add file existence checks in your code: if not os.path.exists(input_csv): raise FileNotFoundError(f"Input file {input_csv} not found")
+
 Debugging and validation:
 - Always add data type inspection and validation in your code: print(df.dtypes, df.info(), df.describe()).
 - Before train/test split: explicitly check target column data types and values.
@@ -62,6 +68,12 @@ Context handling for intermediate steps:
 - Look for patterns: missing values, data types, column names, value ranges to infer previous steps.
 - Determine the next logical preprocessing step based on the current state of the data.
 - Never fail due to missing previous step context - always analyze the current dataset and proceed.
+
+File tracking and step management:
+- Always check the workspace file listing to see what files actually exist.
+- Use the most recent preprocessed_step*.csv file as your input, not a hardcoded step number.
+- If a step file is missing, continue from the last available step file.
+- The step number in your output should reflect the actual step you're performing, not necessarily sequential.
 
 At the end, produce:
 - Final preprocessed CSV filename
