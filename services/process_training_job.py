@@ -122,7 +122,6 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
 
         # Update job with results after loop
         update_job_status(job_id, "completed", datetime.now().isoformat(),
-                         status="completed",
                          result={
                              "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result),
                              "final_input_csv": current_csv,
@@ -136,7 +135,6 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
     except Exception as e:
         # Update job with error
         update_job_status(job_id, "failed", datetime.now().isoformat(), 
-                         status="failed",
                          error=str(e),
                          updated_at=datetime.now().isoformat())
         print(f"Training job {job_id} failed: {str(e)}")
