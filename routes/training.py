@@ -6,7 +6,7 @@ import shutil
 from services.job_service import create_job
 from services.process_training_job import process_training_job
 
-router = APIRouter(title="SproutML Training API", version="1.0.0")
+router = APIRouter()
 
 @router.post("/train")
 async def train_model(

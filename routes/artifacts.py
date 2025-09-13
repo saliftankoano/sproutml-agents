@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from services.daytona_service import get_persistent_sandbox
 from services.job_service import get_job
 
-router = APIRouter(title="SproutML Artifacts API", version="1.0.0")
+router = APIRouter()
 
 @router.get("/job/{job_id}/artifacts")
 async def list_job_artifacts(job_id: str):

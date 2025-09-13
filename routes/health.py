@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 import pandas as pd
 
-router = APIRouter(title="SproutML Health API", version="1.0.0")
+router = APIRouter()
 
 @router.get("/")
 async def root():

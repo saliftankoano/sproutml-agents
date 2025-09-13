@@ -9,7 +9,7 @@ from services.daytona_service import get_persistent_sandbox
 from services.job_service import get_job
 from services.job_service import list_jobs
 
-router = APIRouter(title="SproutML Jobs API", version="1.0.0")
+router = APIRouter()
 
 @router.get("/jobs")
 async def list_jobs():
