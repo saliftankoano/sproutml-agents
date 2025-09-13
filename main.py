@@ -1,6 +1,5 @@
-from agents import Agent, InputGuardrail, GuardrailFunctionOutput, Runner, function_tool
+from agents import Agent, Runner, function_tool
 from agents.tool_context import ToolContext
-from agents.exceptions import InputGuardrailTripwireTriggered
 from dotenv import load_dotenv
 import asyncio
 import os
@@ -11,7 +10,6 @@ import pandas as pd
 import io
 import tempfile
 import shutil
-import uuid
 import json
 from datetime import datetime
 import base64
@@ -21,8 +19,11 @@ from typing import Dict, Any, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from prompts import orchestrator_prompt, preprocessing_agent_prompt
-from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams, VolumeMount
+from daytona import Sandbox
 from types import SimpleNamespace
+from config import DAYTONA_KEY, OPENAI_KEY, ALLOW_ORIGINS, ALLOW_METHODS, ALLOW_HEADERS
+from services.job_service import create_job, update_job_status, get_job, list_jobs
+from services.daytona_service import create_volume, get_volume, delete_volume, create_sandbox, get_sandbox, delete_sandbox, persistent_sandboxes, persistent_volumes, get_persistent_sandbox, get_persistent_volume
 """
 The agent needed are:
     1- Orchestator
@@ -32,30 +33,22 @@ The agent needed are:
     5- Tuning
 """
 load_dotenv()
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI(title="SproutML Training API", version="1.0.0")
-DAYTONA_KEY = os.getenv("DAYTONA_API_KEY")
-daytona = Daytona(DaytonaConfig(api_key=DAYTONA_KEY))
+
 # Track a persistent sandbox/volume per job
-persistent_sandboxes: Dict[str, Any] = {}
-persistent_volumes: Dict[str, Any] = {}
+
 
 # In-memory job store (in production, use Redis or database)
-job_store: Dict[str, Dict[str, Any]] = {}
 executor = ThreadPoolExecutor(max_workers=3)
 
 # Add CORS middleware to allow frontend connections
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://sproutml.com",
-        "https://www.sproutml.com",
-        "https://sproutml.vercel.app"
-    ],
+    allow_origins=ALLOW_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_methods=ALLOW_METHODS,
+    allow_headers=ALLOW_HEADERS,
 )
 
  
@@ -64,27 +57,24 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
     """Create a persistent Daytona sandbox per job, upload dataset, run, then clean up."""
     try:
         # Update job status to processing
-        job_store[job_id]["status"] = "processing"
-        job_store[job_id]["updated_at"] = datetime.now().isoformat()
+        update_job_status(job_id, "processing", datetime.now().isoformat())
         
         print(f"Starting training job {job_id}")
         
         # Create/get a persistent volume for this job and mount it to the sandbox
-        volume = daytona.volume.get(f"sproutml-job-{job_id}", create=True)
-        persistent_volumes[job_id] = volume
-        params = CreateSandboxFromSnapshotParams(
-            language="python",
-            volumes=[VolumeMount(volumeId=volume.id, mountPath="/home/daytona/volume")],
-        )
-        sandbox = daytona.create(params)
-        persistent_sandboxes[job_id] = sandbox
+        volume = get_persistent_volume(job_id)
+        if volume is None:
+            volume = create_volume(job_id)
+        sandbox = get_persistent_sandbox(job_id)
+        if sandbox is None:
+            sandbox = create_sandbox(job_id)
         # Record infrastructure details for later inspection/download
-        job_store[job_id]["daytona"] = {
+        update_job_status(job_id, "daytona", {
             "volume_id": getattr(volume, "id", None),
             "sandbox_id": getattr(sandbox, "id", None),
             "workspace": "/home/daytona/volume/workspace",
             "retain": True,
-        }
+        })
         # Use the mounted volume as the working directory so files persist and are visible
         ws = "/home/daytona/volume/workspace"
         try:
@@ -173,7 +163,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                 break
 
         # Update job with results after loop
-        job_store[job_id].update({
+        update_job_status(job_id, "completed", datetime.now().isoformat(), {
             "status": "completed",
             "result": {
                 "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result),
@@ -188,7 +178,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
     except Exception as e:
         # Update job with error
-        job_store[job_id].update({
+        update_job_status(job_id, "failed", datetime.now().isoformat(), {
             "status": "failed",
             "error": str(e),
             "updated_at": datetime.now().isoformat()
@@ -205,14 +195,6 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             print(f"Warning: Could not clean up {temp_file_path}: {cleanup_error}")
         
         # Retain sandbox/volume for user inspection; cleanup can be triggered via a separate endpoint
-
-async def test_orchestrator():
-    """Test function for the orchestrator - can be used for debugging"""
-    try:
-        result = await Runner.run(orchestrator, "who was the first president of the united states?")
-        print(result.final_output)
-    except InputGuardrailTripwireTriggered as e:
-        print("Guardrail blocked this input:", e)
 
 @function_tool
 def daytona_run_script(
@@ -234,20 +216,23 @@ def daytona_run_script(
     Returns combined stdout/stderr and exit_code as text.
     """
     job_id = getattr(ctx.context, "job_id", None)
-    sandbox = None
+    sandbox: Sandbox | None = None
     if job_id and job_id in persistent_sandboxes:
         sandbox = persistent_sandboxes[job_id]
     else:
         # Create ad-hoc sandbox mounted to the job's volume if present
         if job_id and job_id in persistent_volumes:
-            volume = persistent_volumes[job_id]
-            params = CreateSandboxFromSnapshotParams(
-                language="python",
-                volumes=[VolumeMount(volumeId=volume.id, mountPath="/home/daytona/volume")],
-            )
-            sandbox = daytona.create(params)
+            sandbox = get_persistent_sandbox(job_id)
+            if sandbox is None:
+                sandbox = create_sandbox(job_id)
+            persistent_sandboxes[job_id] = sandbox
         else:
-            sandbox = daytona.create(CreateSandboxFromSnapshotParams(language="python"))
+            sandbox = get_persistent_sandbox(job_id)
+            if sandbox is None:
+                sandbox = create_sandbox(job_id)
+            persistent_sandboxes[job_id] = sandbox
+    if sandbox is None:
+        raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
     try:
         # Ensure workspace exists and is usable
         # Workspace on the mounted volume
@@ -376,8 +361,6 @@ async def train_model(
         Job ID for tracking training progress
     """
     try:
-        # Generate unique job ID
-        job_id = str(uuid.uuid4())
         
         # Save uploaded file temporarily
         temp_dir = tempfile.mkdtemp(prefix="sproutml_")
@@ -388,14 +371,7 @@ async def train_model(
             shutil.copyfileobj(file.file, buffer)
         
         # Create job record
-        job_store[job_id] = {
-            "job_id": job_id,
-            "status": "queued",
-            "filename": file.filename,
-            "target_column": target_column,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        }
+        job_id = create_job(file_name=file.filename, target_column=target_column)
         
         # Prepare training request and pass dataset context for tools
         training_request = f"""
@@ -447,24 +423,24 @@ async def health_check():
 @app.get("/job/{job_id}")
 async def get_job_status(job_id: str):
     """Get the status of a training job"""
-    if job_id not in job_store:
+    if get_job(job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    return job_store[job_id]
+    return get_job(job_id)
 
 @app.get("/jobs")
 async def list_jobs():
     """List all jobs (for debugging)"""
-    return {"jobs": list(job_store.values())}
+    return {"jobs": list_jobs()}
 
 @app.get("/job/{job_id}/artifacts")
 async def list_job_artifacts(job_id: str):
-    if job_id not in job_store:
+    if get_job(job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
     sandbox = persistent_sandboxes.get(job_id)
     if sandbox is None:
         raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
-    ws = job_store.get(job_id, {}).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
+    ws = get_job(job_id).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
     try:
         listing = sandbox.process.exec("pwd && ls -la", cwd=ws, timeout=30)
         files_plain = sandbox.process.exec("ls -1", cwd=ws, timeout=20).result
@@ -479,17 +455,17 @@ async def list_job_artifacts(job_id: str):
         "listing": listing.result,
         "files": files_list,
         "latest_csv": latest or None,
-        "daytona": job_store.get(job_id, {}).get("daytona", {}),
+        "daytona": get_job(job_id).get("daytona", {}),
     })
 
 @app.get("/job/{job_id}/artifact/{filename:path}")
 async def download_job_artifact(job_id: str, filename: str):
-    if job_id not in job_store:
+    if get_job(job_id) is None:
         raise HTTPException(status_code=404, detail="Job not found")
     sandbox = persistent_sandboxes.get(job_id)
     if sandbox is None:
         raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
-    ws = job_store.get(job_id, {}).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
+    ws = get_job(job_id).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
     remote_path = f"{ws}/{filename}"
     try:
         content_bytes = None
