@@ -43,7 +43,8 @@ Workflow:
 
 Critical Rules:
 - TARGET COLUMN: Always extract from handoff message and use throughout preprocessing
-- File handling: Use 'latest_csv' from tool output, verify file exists before reading
+- File handling: FIRST check workspace for actual files, use most recent preprocessed_step*.csv if current file doesn't exist
+- FILE DISCOVERY: Use tool output 'latest_csv' to find the correct input file for next step
 - Train/test split: train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=df[target_col])
 - ⚠️ CRITICAL: NEVER scale the target column - identify target column first, then exclude it from StandardScaler/MinMaxScaler
 - Data types: Validate before splits, handle mixed types, use LabelEncoder for categorical targets
@@ -56,11 +57,38 @@ Best Practices:
 - Output: Always create new versioned file, never overwrite input
 - Validation: Check target column exists, maintain data integrity
 
-Target Column Extraction Example:
+Target Column and File Discovery Example:
 ```python
+import pandas as pd
+import os
+import glob
+
 # FIRST: Extract target column from handoff message
 # If handoff says "Target Column: Exited", then:
 target_col = "Exited"  # Use the exact name from handoff message
+
+# FILE DISCOVERY: Find the correct input file
+INPUT_CSV = "preprocessed_step5.csv"  # From handoff message
+
+# If the expected file doesn't exist, find the most recent one
+if not os.path.exists(INPUT_CSV):
+    print(f"File {INPUT_CSV} not found. Looking for most recent preprocessed file...")
+    # Find all preprocessed step files
+    step_files = glob.glob("preprocessed_step*.csv")
+    if step_files:
+        # Sort by step number
+        step_files.sort(key=lambda x: int(x.split('step')[1].split('.')[0]))
+        INPUT_CSV = step_files[-1]  # Use the most recent
+        print(f"Using most recent file: {INPUT_CSV}")
+    else:
+        # Fallback to original dataset
+        original_files = [f for f in os.listdir('.') if f.endswith('.csv') and 'preprocessed' not in f]
+        if original_files:
+            INPUT_CSV = original_files[0]
+            print(f"Using original dataset: {INPUT_CSV}")
+
+# Read dataset
+df = pd.read_csv(INPUT_CSV)
 
 # Verify target column exists
 if target_col not in df.columns:
