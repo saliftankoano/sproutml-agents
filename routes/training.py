@@ -39,19 +39,26 @@ async def train_model(
         
         # Prepare training request and pass dataset context for tools
         training_request = f"""
-        I have a machine learning training request:
-        
-        - CSV File Path: {temp_file_path}
-        - Original Filename: {file.filename}
-        - Target Column: {target_column}
-        
-        Please orchestrate the complete machine learning pipeline for this dataset.
-        The CSV file is saved at the provided path. Use your specialized agents to:
-        1. Load and validate the CSV file
-        2. Handle data preprocessing 
-        3. Train models
-        4. Evaluate performance
-        5. Tune hyperparameters
+            MACHINE LEARNING TRAINING REQUEST
+
+            Dataset Information:
+            - CSV File Path: {temp_file_path}
+            - Original Filename: {file.filename}
+            - Target Column: {target_column}
+
+            CRITICAL: The target column is "{target_column}". This must be passed to all preprocessing agents.
+
+            Orchestration Tasks:
+            1. Load and validate the CSV file
+            2. Hand off to Preprocessing Agent with dataset filename AND target column: "{target_column}"
+            3. Handle complete data preprocessing pipeline
+            4. Train models
+            5. Evaluate performance 
+            6. Tune hyperparameters
+
+            TARGET COLUMN: {target_column}
+
+            When handing off to the Preprocessing Agent, always include: "Target Column: {target_column}"
         """
         
         # Start async processing (fire and forget) using persistent sandbox + volume
