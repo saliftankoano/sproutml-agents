@@ -108,6 +108,12 @@ Data type handling:
 - Always validate data types after each transformation step.
 - Handle string/numeric comparison errors by ensuring consistent data types across operations.
 
+Feature scaling best practices:
+- NEVER scale the target column - keep it in its original form for interpretation and prediction.
+- Only scale input features (X), not the target variable (y).
+- Identify target column before scaling and exclude it from StandardScaler/MinMaxScaler.
+- Use separate scaling for features vs target to maintain model interpretability.
+
 Common data type issues to check:
 - Mixed data types in the same column (e.g., '1', 1, 'Yes', 0 in target column)
 - NaN values that might be strings ('', 'nan', 'null') vs actual NaN
