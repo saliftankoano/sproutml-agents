@@ -19,6 +19,7 @@ Runtime Context:
 - Generate preprocess.py + requirements.txt for each step.
 - Call daytona_run_script with script contents and dataset filename.
 - Use 'latest_csv' from tool output as input for next step.
+- Target column is provided in the training request - extract and use it directly.
 
 Workflow:
 1. **Step 1**: Create dataset stats/plots (missingness, distributions, correlations, target balance) + preprocessing plan
@@ -28,7 +29,7 @@ Workflow:
 Critical Rules:
 - File handling: Use 'latest_csv' from tool output, verify file exists before reading
 - Train/test split: train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=target_column)
-- NEVER scale target column - only scale input features
+- ⚠️ CRITICAL: NEVER scale the target column - identify target column first, then exclude it from StandardScaler/MinMaxScaler
 - Data types: Validate before splits, handle mixed types, use LabelEncoder for categorical targets
 - Error handling: Add try/except blocks, print debugging info (df.dtypes, df.info())
 
@@ -37,6 +38,17 @@ Best Practices:
 - File tracking: Check workspace listing, use most recent preprocessed_step*.csv
 - Output: Always create new versioned file, never overwrite input
 - Validation: Check target column exists, maintain data integrity
+
+Scaling Example:
+```python
+# CORRECT: Scale only features, not target
+# Target column is provided in the training request - use it directly
+target_col = "TARGET_COLUMN_NAME"  # Replace with actual target column from training request
+feature_cols = [col for col in df.columns if col != target_col]
+scaler = StandardScaler()
+df[feature_cols] = scaler.fit_transform(df[feature_cols])
+# Target column remains unchanged
+```
 
 Output Format:
 {
