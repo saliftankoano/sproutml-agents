@@ -184,27 +184,36 @@ def run_training_pipeline(
         training_service = TrainingService()
         
         # Run the training pipeline asynchronously
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Use a more robust approach to handle event loops
+        import concurrent.futures
+        import threading
         
-        try:
-            result = loop.run_until_complete(
-                training_service.run_training_pipeline(
-                    dataset_path=dataset_path,
-                    target_column=target_column,
-                    ctx=ctx.context,
-                    max_iterations=max_iterations
+        def run_in_new_loop():
+            """Run the training pipeline in a new event loop in a separate thread"""
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(
+                    training_service.run_training_pipeline(
+                        dataset_path=dataset_path,
+                        target_column=target_column,
+                        ctx=ctx.context,
+                        max_iterations=max_iterations
+                    )
                 )
-            )
-            
-            return json.dumps({
-                "status": "success",
-                "message": "Training pipeline completed successfully",
-                "results": result
-            })
-            
-        finally:
-            loop.close()
+            finally:
+                new_loop.close()
+        
+        # Run in a separate thread to avoid event loop conflicts
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_new_loop)
+            result = future.result(timeout=1800)  # 30 minute timeout
+        
+        return json.dumps({
+            "status": "success",
+            "message": "Training pipeline completed successfully",
+            "results": result
+        })
             
     except Exception as e:
         return json.dumps({

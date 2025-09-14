@@ -170,10 +170,19 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         print(f"Preprocessing completed. Final dataset: {current_csv}")
         print("Handing off to Master Training Agent for model training...")
         
+        # Extract training dataset filename (handle case where both train and test files are present)
+        training_dataset = current_csv
+        if ',' in current_csv:
+            # If multiple files are present, extract the training file
+            files = [f.strip() for f in current_csv.split(',')]
+            training_file = next((f for f in files if 'train' in f.lower()), files[0])
+            training_dataset = training_file
+            print(f"Extracted training dataset: {training_dataset}")
+        
         # Hand off to Master Training Agent
         training_handoff_request = (
             f"Hand off to Master Training Agent. "
-            f"Preprocessed dataset: '{current_csv}'. "
+            f"Preprocessed dataset: '{training_dataset}'. "
             f"Target Column: {target_column}. "
             f"Preprocessing complete with {step_num} steps. "
             f"Please begin model selection and training pipeline."
@@ -188,6 +197,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                              "preprocessing_output": result.final_output if hasattr(result, 'final_output') else str(result),
                              "training_output": training_output,
                              "final_input_csv": current_csv,
+                             "training_dataset": training_dataset,
                              "preprocessing_steps": step_results,
                              "total_preprocessing_steps": step_num,
                          },
