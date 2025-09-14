@@ -14,7 +14,22 @@ def create_volume(job_id: str):
         persistent_volumes[job_id] = volume
         return volume
     except Exception as e:
-        print(f"Error creating volume for job {job_id}: {e}")
+        error_msg = str(e)
+        print(f"Error creating volume for job {job_id}: {error_msg}")
+        
+        # Check if it's a quota exceeded error
+        if "disk quota exceeded" in error_msg.lower() or "maximum allowed" in error_msg.lower():
+            print(f"Disk quota exceeded for job {job_id}. Attempting cleanup of old volumes...")
+            cleanup_old_volumes()
+            
+            # Try again after cleanup
+            try:
+                volume = daytona.volume.get(f"sproutml-job-{job_id}", create=True)
+                persistent_volumes[job_id] = volume
+                return volume
+            except Exception as retry_e:
+                print(f"Volume creation failed even after cleanup for job {job_id}: {retry_e}")
+                return None
         return None
 
 def wait_for_volume_ready(job_id: str, max_wait_time: int = 60):
@@ -58,16 +73,39 @@ def delete_volume(job_id: str):
 
 def create_sandbox(job_id: str):
     volume = get_volume(job_id)
-    params = CreateSandboxFromSnapshotParams(
-        language="python",
-        volumes=[VolumeMount(volumeId=volume.id, mountPath="/home/daytona/volume")],
-    )
+    if volume is None:
+        print(f"No volume available for job {job_id}, creating sandbox without persistent volume")
+        # Create sandbox without volume mount as fallback
+        params = CreateSandboxFromSnapshotParams(language="python")
+    else:
+        params = CreateSandboxFromSnapshotParams(
+            language="python",
+            volumes=[VolumeMount(volumeId=volume.id, mountPath="/home/daytona/volume")],
+        )
+    
     try:
         sandbox = daytona.create(params)
         persistent_sandboxes[job_id] = sandbox
         return sandbox
     except Exception as e:
-        print(f"Error creating sandbox for job {job_id}: {e}")
+        error_msg = str(e)
+        print(f"Error creating sandbox for job {job_id}: {error_msg}")
+        
+        # Check if it's a quota exceeded error
+        if "disk quota exceeded" in error_msg.lower() or "maximum allowed" in error_msg.lower():
+            print(f"Disk quota exceeded for job {job_id}. Attempting cleanup and fallback...")
+            cleanup_old_sandboxes()
+            
+            # Try creating without volume as fallback
+            try:
+                fallback_params = CreateSandboxFromSnapshotParams(language="python")
+                sandbox = daytona.create(fallback_params)
+                persistent_sandboxes[job_id] = sandbox
+                print(f"Created fallback sandbox (no persistent volume) for job {job_id}")
+                return sandbox
+            except Exception as fallback_e:
+                print(f"Fallback sandbox creation failed for job {job_id}: {fallback_e}")
+                return None
         return None
 
 def get_sandbox(job_id: str):
@@ -101,3 +139,75 @@ def get_persistent_volume(job_id: str):
     except Exception as e:
         print(f"Error getting persistent volume for job {job_id}: {e}")
         return None
+
+def cleanup_old_volumes():
+    """Clean up old volumes to free disk quota"""
+    try:
+        # Get list of all volumes
+        volumes = daytona.volume.list()
+        sproutml_volumes = [v for v in volumes if v.name.startswith("sproutml-job-")]
+        
+        # Sort by creation time and keep only the 5 most recent
+        sorted_volumes = sorted(sproutml_volumes, key=lambda v: getattr(v, 'created_at', ''), reverse=True)
+        volumes_to_delete = sorted_volumes[5:]  # Delete all but the 5 most recent
+        
+        for volume in volumes_to_delete:
+            try:
+                print(f"Cleaning up old volume: {volume.name}")
+                daytona.volume.delete(volume.id)
+            except Exception as e:
+                print(f"Failed to delete volume {volume.name}: {e}")
+                
+        print(f"Cleaned up {len(volumes_to_delete)} old volumes")
+        
+    except Exception as e:
+        print(f"Error during volume cleanup: {e}")
+
+def cleanup_old_sandboxes():
+    """Clean up old sandboxes to free resources"""
+    try:
+        # Get list of all sandboxes
+        sandboxes = daytona.sandbox.list()
+        sproutml_sandboxes = [s for s in sandboxes if hasattr(s, 'name') and 'sproutml' in s.name.lower()]
+        
+        # Sort by creation time and keep only the 3 most recent
+        sorted_sandboxes = sorted(sproutml_sandboxes, key=lambda s: getattr(s, 'created_at', ''), reverse=True)
+        sandboxes_to_delete = sorted_sandboxes[3:]  # Delete all but the 3 most recent
+        
+        for sandbox in sandboxes_to_delete:
+            try:
+                print(f"Cleaning up old sandbox: {getattr(sandbox, 'name', sandbox.id)}")
+                daytona.sandbox.delete(sandbox.id)
+            except Exception as e:
+                print(f"Failed to delete sandbox {getattr(sandbox, 'name', sandbox.id)}: {e}")
+                
+        print(f"Cleaned up {len(sandboxes_to_delete)} old sandboxes")
+        
+    except Exception as e:
+        print(f"Error during sandbox cleanup: {e}")
+
+def force_cleanup_job_resources(job_id: str):
+    """Force cleanup of all resources for a specific job"""
+    try:
+        # Clean up sandbox
+        if job_id in persistent_sandboxes:
+            try:
+                sandbox = persistent_sandboxes[job_id]
+                if sandbox:
+                    sandbox.delete()
+                del persistent_sandboxes[job_id]
+                print(f"Cleaned up sandbox for job {job_id}")
+            except Exception as e:
+                print(f"Error cleaning up sandbox for job {job_id}: {e}")
+        
+        # Clean up volume
+        if job_id in persistent_volumes:
+            try:
+                delete_volume(job_id)
+                del persistent_volumes[job_id]
+                print(f"Cleaned up volume for job {job_id}")
+            except Exception as e:
+                print(f"Error cleaning up volume for job {job_id}: {e}")
+                
+    except Exception as e:
+        print(f"Error during force cleanup for job {job_id}: {e}")

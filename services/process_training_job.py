@@ -24,20 +24,31 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                 # Wait for volume to be ready before creating sandbox
                 volume = wait_for_volume_ready(job_id)
         
-        if volume is None:
-            raise Exception("Failed to create or get ready volume for job")
-            
+        # Try to create sandbox (with or without volume)
         sandbox = get_persistent_sandbox(job_id)
         if sandbox is None:
             sandbox = create_sandbox(job_id)
+            
+        if sandbox is None:
+            raise Exception("Failed to create sandbox for job")
+        # Determine workspace path based on whether volume is available
+        try:
+            sandbox.process.exec("test -d /home/daytona/volume", cwd=".", timeout=10)
+            ws = "/home/daytona/volume/workspace"
+            volume_available = True
+        except Exception:
+            ws = "/home/daytona/workspace"
+            volume_available = False
+            
         # Record infrastructure details for later inspection/download
         update_job_status(job_id, "daytona", datetime.now().isoformat(),
-                         volume_id=getattr(volume, "id", None),
+                         volume_id=getattr(volume, "id", None) if volume else None,
                          sandbox_id=getattr(sandbox, "id", None),
-                         workspace="/home/daytona/volume/workspace",
+                         workspace=ws,
+                         volume_available=volume_available,
                          retain=True)
-        # Use the mounted volume as the working directory so files persist and are visible
-        ws = "/home/daytona/volume/workspace"
+        
+        # Create workspace directory
         try:
             sandbox.process.exec(f"mkdir -p {ws}", cwd=".", timeout=30)
         except Exception:
