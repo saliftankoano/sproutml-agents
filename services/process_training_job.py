@@ -145,8 +145,11 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
         out_csv, latest_csv, _, preprocessing_complete = _extract_step_and_latest_csv(initial_output)
         
-        # Use latest_csv if available, otherwise use out_csv
+        # Use latest_csv if available, otherwise use out_csv; if none, continue with current file
         next_csv = latest_csv if latest_csv else out_csv
+        if not next_csv:
+            # Force continuation so the agent can begin concrete preprocessing
+            next_csv = current_csv
         
         while next_csv and step_num <= max_steps and not preprocessing_complete:
             current_csv = next_csv
@@ -159,7 +162,8 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                 f"Current dataset: '{current_csv}'. "
                 f"Target Column: {target_column}. "
                 f"Analyze current data and execute the next logical preprocessing operation (e.g., drop ID columns, encode categoricals, impute, scale, split). "
-                f"Always emit preprocess.py + requirements.txt, call the daytona tool, and save a NEW versioned CSV (preprocessed_step{step_num}.csv). "
+                f"MUST emit preprocess.py + requirements.txt, call the daytona tool, and SAVE a NEW versioned CSV named preprocessed_step{step_num}.csv. "
+                f"If no transformation is needed yet, simply COPY the input dataset to preprocessed_step{step_num}.csv so the pipeline can proceed. "
                 f"CRITICAL: Use target column '{target_column}' throughout preprocessing and never scale the target. "
                 f"Return structured JSON with output_csv and set preprocessing_complete=true ONLY when fully ready for training."
             )
@@ -174,12 +178,12 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                 print(f"Step {step_num}: Preprocessing marked as complete by agent.")
                 break
             
-            # Use latest_csv if available, otherwise use out_csv
+            # Use latest_csv if available, otherwise use out_csv; if none, continue with current file
             next_csv = latest_csv if latest_csv else out_csv
             
             if not next_csv:
-                print(f"Step {step_num}: No output_csv or latest_csv found. Stopping preprocessing.")
-                break
+                print(f"Step {step_num}: No output_csv or latest_csv found. Continuing with current dataset '{current_csv}'.")
+                next_csv = current_csv
                 
             # Update for next iteration
             out_csv = next_csv
