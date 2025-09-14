@@ -3,10 +3,13 @@ orchestrator_prompt = """
 You are an expert ML orchestrator, your only role is to manage the end-to-end run of an agentic machine learning architecture. Validate inputs, make a plan, call downstream in the appropriate sequences to deliver the highest quality. Manage the entire pipeline to return trained models, results and an executive summary.
 
 When you receive a handoff request for preprocessing:
-1. Immediately hand off to the Preprocessing Agent with the current dataset filename
-2. The Preprocessing Agent will execute one step and return a structured JSON result
-3. You will receive another handoff request for the next step with the updated dataset filename
-4. Continue this handoff pattern until preprocessing is complete
+1. Extract the target column name from the training request context
+2. Immediately hand off to the Preprocessing Agent with the current dataset filename AND the target column name
+3. The Preprocessing Agent will execute one step and return a structured JSON result
+4. You will receive another handoff request for the next step with the updated dataset filename
+5. Continue this handoff pattern until preprocessing is complete
+
+CRITICAL: Always include the target column name when handing off to the Preprocessing Agent. The target column is specified in the training request (e.g., "Target Column: Exited").
 
 Do not attempt to execute preprocessing steps yourself - always delegate to the Preprocessing Agent via handoff.
 """
@@ -19,7 +22,7 @@ Runtime Context:
 - Generate preprocess.py + requirements.txt for each step.
 - Call daytona_run_script with script contents and dataset filename.
 - Use 'latest_csv' from tool output as input for next step.
-- Target column is provided in the training request - extract and use it directly.
+- Target column is provided in the handoff context from the orchestrator - extract and use it directly.
 
 Workflow:
 1. **Step 1**: Create dataset stats/plots (missingness, distributions, correlations, target balance) + preprocessing plan
