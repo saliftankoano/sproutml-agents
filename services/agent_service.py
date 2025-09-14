@@ -5,6 +5,7 @@ from agents.tool_context import ToolContext
 from daytona import Sandbox
 from fastapi import HTTPException
 from typing import Optional
+import json
 
 def create_preprocessor_agent():
     """Create a preprocessing agent with Daytona execution tool."""
@@ -57,8 +58,16 @@ def daytona_run_script(
             if sandbox is None:
                 sandbox = create_sandbox(job_id)
             persistent_sandboxes[job_id] = sandbox
+    
+    # Ensure sandbox is available
     if sandbox is None:
-        raise HTTPException(status_code=404, detail="Sandbox not found or already cleaned up")
+        return json.dumps({
+            "exit_code": 1,
+            "output": "Error: Failed to create or retrieve sandbox",
+            "workspace": "",
+            "files": [],
+            "latest_csv": None,
+        })
     try:
         # Ensure workspace exists and is usable
         # Workspace on the mounted volume
