@@ -49,3 +49,31 @@ async def download_job_artifact(job_id: str, filename: str):
     return StreamingResponse(io.BytesIO(content_bytes), media_type=media_type, headers={
         "Content-Disposition": f"attachment; filename={os.path.basename(filename)}"
     })
+
+@router.get("/job/{job_id}/models")
+async def list_trained_models(job_id: str):
+    """List all trained model files for a job"""
+    if get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job_info = get_job(job_id)
+    trained_models = job_info.get("result", {}).get("trained_models", [])
+    
+    return {
+        "job_id": job_id,
+        "trained_models": trained_models,
+        "model_files_ready": len(trained_models) > 0,
+        "total_models": len(trained_models)
+    }
+
+@router.get("/job/{job_id}/model/{model_name}")
+async def download_trained_model(job_id: str, model_name: str):
+    """Download a specific trained model pickle file"""
+    if get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Construct the pickle filename
+    pickle_filename = f"trained_{model_name.lower()}.pkl"
+    
+    # Use the existing download endpoint
+    return await download_job_artifact(job_id, pickle_filename)

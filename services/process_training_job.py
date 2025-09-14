@@ -191,6 +191,19 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         training_result = await Runner.run(job_orchestrator, training_handoff_request, context=tool_context, max_turns=50)
         training_output = str(getattr(training_result, "final_output", ""))
         
+        # Parse training results to extract model information
+        trained_models = []
+        try:
+            # Try to extract model information from training output
+            import re
+            import json
+            json_match = re.search(r'\{.*"trained_models".*\}', training_output, re.DOTALL)
+            if json_match:
+                training_data = json.loads(json_match.group())
+                trained_models = training_data.get('trained_models', [])
+        except Exception as e:
+            print(f"Error parsing training results for models: {e}")
+        
         # Update job with results after training
         update_job_status(job_id, "completed", datetime.now().isoformat(),
                          result={
@@ -200,6 +213,8 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                              "training_dataset": training_dataset,
                              "preprocessing_steps": step_results,
                              "total_preprocessing_steps": step_num,
+                             "trained_models": trained_models,
+                             "model_files_ready": len(trained_models) > 0,
                          },
                          completed_at=datetime.now().isoformat())
         print(f"Training job {job_id} completed successfully")

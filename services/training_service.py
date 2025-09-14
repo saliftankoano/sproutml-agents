@@ -434,10 +434,38 @@ Return analysis in the specified JSON format.
                 print(f"Error in iterative improvement: {e}")
                 break
         
+        # Collect all trained model pickle files
+        trained_models = []
+        for result in training_results:
+            if result.get('status') == 'completed':
+                try:
+                    # Parse the result to extract model information
+                    result_data = result.get('result', '')
+                    if isinstance(result_data, str):
+                        # Try to extract JSON from the result string
+                        import re
+                        json_match = re.search(r'\{.*\}', result_data, re.DOTALL)
+                        if json_match:
+                            import json
+                            model_data = json.loads(json_match.group())
+                            if model_data.get('model_ready_for_download'):
+                                trained_models.append({
+                                    'model_name': model_data.get('model_name', 'Unknown'),
+                                    'model_category': model_data.get('model_category', 'Unknown'),
+                                    'pickle_file': model_data.get('model_path', ''),
+                                    'performance_summary': model_data.get('performance_summary', ''),
+                                    'best_params': model_data.get('best_params', {}),
+                                    'test_metrics': model_data.get('test_metrics', {})
+                                })
+                except Exception as e:
+                    print(f"Error parsing model result: {e}")
+        
         return {
             'characteristics': characteristics,
             'selected_models': selected_models,
             'final_results': evaluation_results,
             'iterations_completed': iteration,
+            'trained_models': trained_models,
+            'model_files_ready': len(trained_models) > 0,
             'status': 'completed'
         }

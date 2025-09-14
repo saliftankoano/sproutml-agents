@@ -20,12 +20,28 @@ async def list_job_artifacts(job_id: str):
             "sh -lc 'ls -1t preprocessed_step*.csv 2>/dev/null | head -1'", cwd=ws, timeout=20
         ).result.strip()
         files_list = [f for f in (files_plain or "").split("\n") if f.strip()]
+        
+        # Get trained model pickle files
+        try:
+            model_files = sandbox.process.exec(
+                "ls -1 trained_*.pkl 2>/dev/null || echo ''", cwd=ws, timeout=20
+            ).result.strip()
+            model_files_list = [f for f in model_files.split("\n") if f.strip()] if model_files else []
+        except Exception:
+            model_files_list = []
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list artifacts: {e}")
+    # Get job information including trained models
+    job_info = get_job(job_id)
+    trained_models = job_info.get("result", {}).get("trained_models", []) if job_info else []
+    
     return JSONResponse({
         "workspace": ws,
         "listing": listing.result,
         "files": files_list,
         "latest_csv": latest or None,
+        "model_files": model_files_list,
+        "trained_models": trained_models,
+        "model_files_ready": len(model_files_list) > 0,
         "daytona": get_job(job_id).get("daytona", {}),
     })

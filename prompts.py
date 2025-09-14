@@ -247,7 +247,8 @@ TRAINING WORKFLOW:
 4. Apply hyperparameter tuning using GridSearchCV or RandomizedSearchCV
 5. Train final model with best parameters
 6. Generate performance metrics and model artifacts
-7. Save trained model and results
+7. Save trained model as pickle file: trained_{model_name.lower()}.pkl
+8. Save model metadata and results
 
 OUTPUT FORMAT:
 {{
@@ -258,7 +259,8 @@ OUTPUT FORMAT:
   "test_metrics": {{}},
   "model_path": "trained_{model_name.lower()}.pkl",
   "performance_summary": "string",
-  "tuning_recommendations": "string"
+  "tuning_recommendations": "string",
+  "model_ready_for_download": true
 }}
 
 CRITICAL RULES:
@@ -267,6 +269,8 @@ CRITICAL RULES:
 - Use cross-validation for robust performance estimation
 - Save model artifacts for later evaluation
 - Document all hyperparameter choices and their rationale
+- IMPORTANT: Save the trained model using pickle: import pickle; pickle.dump(model, open('trained_{model_name.lower()}.pkl', 'wb'))
+- Ensure the pickle file is saved in the workspace directory for download
 """
 
 evaluator_agent_prompt = """
