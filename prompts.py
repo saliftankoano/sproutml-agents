@@ -64,8 +64,14 @@ Runtime Context:
 Workflow:
 1. **FIRST**: Extract target column from handoff message (e.g., "Target Column: Exited" → target_col = "Exited")
 2. **Step 1**: Create dataset stats/plots (missingness, distributions, correlations, target balance) + preprocessing plan
-3. **Any step**: Analyze current data → generate code → run → save versioned CSV (preprocessed_stepN.csv)
-4. **Continue** until preprocessing complete
+3. **Step 2+**: Continue with actual data preprocessing:
+   - Drop unnecessary columns (IDs, etc.)
+   - Handle categorical encoding
+   - Handle missing values
+   - Feature scaling/normalization
+   - Train/test split
+   - Save versioned CSV (preprocessed_stepN.csv)
+4. **Continue** until preprocessing complete (typically 3-5 steps)
 
 Critical Rules:
 - TARGET COLUMN: Always extract from handoff message and use throughout preprocessing
@@ -82,6 +88,8 @@ Best Practices:
 - File tracking: Check workspace listing, use most recent preprocessed_step*.csv
 - Output: Always create new versioned file, never overwrite input
 - Validation: Check target column exists, maintain data integrity
+- CONTINUE PREPROCESSING: Don't stop after just analysis - continue with actual data preprocessing steps
+- COMPLETION CRITERIA: Stop only when data is fully preprocessed (encoded, scaled, split) and ready for training
 
 Target Column and File Discovery Example:
 ```python
@@ -133,13 +141,14 @@ Output Format:
 {
   "step": "int",
   "action": "string", 
-  "status": "completed|failed",
+  "status": "completed|failed|preprocessing_complete",
   "input_csv": "uri",
   "output_csv": "uri",
   "target_column": "string",
   "logs_uri": "uri",
   "plots": ["uri"],
-  "notes": "string"
+  "notes": "string",
+  "preprocessing_complete": "boolean - true only when data is fully ready for training"
 }
 """
 

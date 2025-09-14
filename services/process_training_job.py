@@ -85,16 +85,18 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         result = await Runner.run(job_orchestrator, training_request, context=tool_context, max_turns=50)
 
         # Handoff-based preprocessing loop: orchestrator explicitly hands off to preprocessing agent for each step
-        def _extract_step_and_latest_csv(json_text: str) -> tuple[str | None, str | None, dict[str, Any] | None]:
+        def _extract_step_and_latest_csv(json_text: str) -> tuple[str | None, str | None, dict[str, Any] | None, bool]:
             """Extract output_csv from JSON and also look for latest_csv from tool execution"""
             output_csv = None
             latest_csv = None
             data = None
+            preprocessing_complete = False
             
             try:
                 data = json.loads(json_text)
                 if isinstance(data, dict):
                     output_csv = data.get("output_csv")
+                    preprocessing_complete = data.get("preprocessing_complete", False)
                     # Also look for latest_csv from tool execution results
                     if "latest_csv" in data:
                         latest_csv = data.get("latest_csv")
@@ -109,6 +111,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                         data = json.loads(json_text[start : end + 1])
                         if isinstance(data, dict):
                             output_csv = data.get("output_csv")
+                            preprocessing_complete = data.get("preprocessing_complete", False)
                             if "latest_csv" in data:
                                 latest_csv = data.get("latest_csv")
                 except Exception:
@@ -118,7 +121,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             if not output_csv and latest_csv:
                 output_csv = latest_csv
                 
-            return output_csv, latest_csv, data
+            return output_csv, latest_csv, data, preprocessing_complete
 
         current_csv = os.path.basename(temp_file_path)
         step_num = 1
@@ -129,12 +132,12 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         initial_output = str(getattr(result, "final_output", ""))
         step_results.append(f"Initial: {initial_output}")
         
-        out_csv, latest_csv, _ = _extract_step_and_latest_csv(initial_output)
+        out_csv, latest_csv, _, preprocessing_complete = _extract_step_and_latest_csv(initial_output)
         
         # Use latest_csv if available, otherwise use out_csv
         next_csv = latest_csv if latest_csv else out_csv
         
-        while next_csv and next_csv != current_csv and step_num <= max_steps:
+        while next_csv and next_csv != current_csv and step_num <= max_steps and not preprocessing_complete:
             current_csv = next_csv
             tool_context.dataset_filename = current_csv
             step_num += 1
@@ -154,13 +157,17 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             step_output = str(getattr(result, "final_output", ""))
             step_results.append(f"Step {step_num}: {step_output}")
             
-            out_csv, latest_csv, step_data = _extract_step_and_latest_csv(step_output)
+            out_csv, latest_csv, step_data, preprocessing_complete = _extract_step_and_latest_csv(step_output)
             
             # Use latest_csv if available, otherwise use out_csv
             next_csv = latest_csv if latest_csv else out_csv
             
             if not next_csv:
                 print(f"Step {step_num}: No output_csv or latest_csv found. Stopping preprocessing.")
+                break
+            
+            if preprocessing_complete:
+                print(f"Step {step_num}: Preprocessing marked as complete by agent.")
                 break
                 
             # Update for next iteration
