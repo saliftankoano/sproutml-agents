@@ -113,9 +113,9 @@ class TrainingService:
                         """
         
         # Run analysis in Daytona sandbox
-        from services.agent_service import daytona_run_script
+        from services.agent_service import daytona_direct
         
-        result = daytona_run_script(
+        result = daytona_direct(
             ctx=ctx,
             script_name="analyze_dataset.py",
             script=analysis_script,
@@ -134,7 +134,7 @@ class TrainingService:
                                     characteristics = json.load(f)
                                 print(json.dumps(characteristics))
                             """
-                load_result = daytona_run_script(
+                load_result = daytona_direct(
                     ctx=ctx,
                     script_name="load_characteristics.py",
                     script=load_script,

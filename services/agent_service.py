@@ -19,11 +19,10 @@ def create_preprocessor_agent():
         name="Preprocessing Agent",
         handoff_description="Agent specializing in preprocessing datasets",
         instructions=preprocessing_agent_prompt,
-        tools=[daytona_run_script],
+        tools=[daytona_agent_tool],
     )
 
-@function_tool
-def daytona_run_script(
+def _daytona_run_script_impl(
     ctx: ToolContext,
     script_name: str,
     script: str,
@@ -137,8 +136,23 @@ def daytona_run_script(
             except Exception:
                 pass
 
+# Create the function tool for agents
+daytona_agent_tool = function_tool(_daytona_run_script_impl)
+
+# Create a regular function that can be called directly from other services
+def daytona_direct(
+    ctx: ToolContext,
+    script_name: str,
+    script: str,
+    requirements: Optional[str] = None,
+    dataset_destination: Optional[str] = None,
+    timeout: int = 300
+) -> str:
+    """Direct callable version of daytona_run_script for use in services."""
+    return _daytona_run_script_impl(ctx, script_name, script, requirements, dataset_destination, timeout)
+
 @function_tool
-def run_training_pipeline(
+def training_agent_tool(
     ctx: ToolContext,
     dataset_filename: str,
     target_column: str,
@@ -226,7 +240,7 @@ def create_master_training_agent():
     return Agent(
         name="Master Training Agent",
         instructions=master_training_agent_prompt,
-        tools=[daytona_run_script, run_training_pipeline],
+        tools=[daytona_agent_tool, training_agent_tool],
     )
 
 def create_sub_training_agent(model_name: str, model_category: str, dataset_characteristics: dict, performance_expectations: str):
@@ -237,7 +251,7 @@ def create_sub_training_agent(model_name: str, model_category: str, dataset_char
     return Agent(
         name=f"{model_name} Training Agent",
         instructions=prompt,
-        tools=[daytona_run_script],
+        tools=[daytona_agent_tool],
     )
 
 def create_evaluator_agent():
@@ -245,7 +259,7 @@ def create_evaluator_agent():
     return Agent(
         name="Evaluator Agent",
         instructions=evaluator_agent_prompt,
-        tools=[daytona_run_script],
+        tools=[daytona_agent_tool],
     )
 
 
