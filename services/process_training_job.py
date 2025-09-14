@@ -64,6 +64,8 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
 
        
         orchestrator = create_orchestrator_agent()
+        # Also create a dedicated preprocessing agent to run deterministic multi-step preprocessing
+        preprocessor_agent = create_preprocessor_agent()
         
         # Create orchestrator with the persistent preprocessor
         job_orchestrator = orchestrator
@@ -75,14 +77,23 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
                 target_column = line.split('Target Column:')[1].strip()
                 break
         
-        # Run the orchestrator agent with the training context (include dataset_path so tool can self-heal)
+        # Prepare shared tool context (include dataset_path so tool can self-heal)
         tool_context = SimpleNamespace(
             job_id=job_id,
             dataset_filename=os.path.basename(temp_file_path),
             dataset_path=temp_file_path,
             target_column=target_column,
         )
-        result = await Runner.run(job_orchestrator, training_request, context=tool_context, max_turns=50)
+        # Kick off preprocessing directly with the preprocessing agent (Step 1)
+        initial_handoff_request = (
+            f"Preprocessing step 1. "
+            f"Dataset: '{tool_context.dataset_filename}'. "
+            f"Target Column: {target_column}. "
+            f"Perform initial analysis (stats/plots) AND produce a concrete preprocessing plan, then execute the FIRST actual preprocessing operation if applicable. "
+            f"Always emit preprocess.py + requirements.txt, call the daytona tool, and save a versioned CSV (e.g., preprocessed_step1.csv). "
+            f"Return structured JSON with output_csv and preprocessing_complete when truly ready for training."
+        )
+        result = await Runner.run(preprocessor_agent, initial_handoff_request, context=tool_context, max_turns=50)
 
         # Handoff-based preprocessing loop: orchestrator explicitly hands off to preprocessing agent for each step
         def _extract_step_and_latest_csv(json_text: str) -> tuple[str | None, str | None, dict[str, Any] | None, bool]:
@@ -142,18 +153,18 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             tool_context.dataset_filename = current_csv
             step_num += 1
             
-            # Orchestrator explicitly hands off to preprocessing agent for this step
+            # Directly instruct the preprocessing agent to continue with the next concrete step
             handoff_request = (
-                f"Hand off to preprocessing agent for step {step_num}. "
+                f"Continue preprocessing step {step_num}. "
                 f"Current dataset: '{current_csv}'. "
                 f"Target Column: {target_column}. "
-                f"The preprocessing agent should analyze the current dataset and execute the next logical preprocessing step. "
-                f"If this is step 1, do initial analysis and planning. If this is a later step, analyze the current data state and continue preprocessing. "
-                f"CRITICAL: Use target column '{target_column}' throughout preprocessing. "
-                f"Return the structured JSON result with output_csv for the next iteration."
+                f"Analyze current data and execute the next logical preprocessing operation (e.g., drop ID columns, encode categoricals, impute, scale, split). "
+                f"Always emit preprocess.py + requirements.txt, call the daytona tool, and save a NEW versioned CSV (preprocessed_step{step_num}.csv). "
+                f"CRITICAL: Use target column '{target_column}' throughout preprocessing and never scale the target. "
+                f"Return structured JSON with output_csv and set preprocessing_complete=true ONLY when fully ready for training."
             )
             
-            result = await Runner.run(job_orchestrator, handoff_request, context=tool_context, max_turns=50)
+            result = await Runner.run(preprocessor_agent, handoff_request, context=tool_context, max_turns=50)
             step_output = str(getattr(result, "final_output", ""))
             step_results.append(f"Step {step_num}: {step_output}")
             
