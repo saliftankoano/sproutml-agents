@@ -7,7 +7,6 @@ from prompts import (
     evaluator_agent_prompt
 )
 from services.daytona_service import persistent_sandboxes, persistent_volumes, get_persistent_sandbox, create_sandbox
-from services.training_service import TrainingService
 from agents.tool_context import ToolContext
 from daytona import Sandbox
 from typing import Optional
@@ -180,7 +179,8 @@ def run_training_pipeline(
         # Construct full dataset path
         dataset_path = f"{workspace}/{dataset_filename}"
         
-        # Create TrainingService and run pipeline
+        # Create TrainingService and run pipeline (import locally to avoid circular dependency)
+        from services.training_service import TrainingService
         training_service = TrainingService()
         
         # Run the training pipeline asynchronously

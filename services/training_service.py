@@ -5,7 +5,6 @@ import asyncio
 import json
 from typing import List, Dict, Any, Optional
 from agents import Runner
-from services.agent_service import create_sub_training_agent, create_evaluator_agent
 from types import SimpleNamespace
 
 class TrainingService:
@@ -13,6 +12,8 @@ class TrainingService:
     
     def __init__(self):
         self.sub_agents = []
+        # Import locally to avoid circular dependency
+        from services.agent_service import create_evaluator_agent
         self.evaluator_agent = create_evaluator_agent()
     
     async def analyze_dataset_characteristics(self, dataset_path: str, target_column: str, ctx: SimpleNamespace) -> Dict[str, Any]:
@@ -270,6 +271,9 @@ class TrainingService:
     async def create_sub_training_agents(self, selected_models: List[Dict[str, str]], 
                                        characteristics: Dict[str, Any]) -> List[Any]:
         """Create Sub Training Agents for the selected models"""
+        
+        # Import locally to avoid circular dependency
+        from services.agent_service import create_sub_training_agent
         
         sub_agents = []
         
