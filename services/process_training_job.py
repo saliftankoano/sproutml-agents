@@ -62,18 +62,25 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         except Exception as e:
             print(f"[Daytona] Listing failed for job {job_id}: {e}")
 
-        # Create preprocessor agent (stateless tool)
-        persistent_preprocessor = create_preprocessor_agent()
+       
         orchestrator = create_orchestrator_agent()
         
         # Create orchestrator with the persistent preprocessor
         job_orchestrator = orchestrator
+        
+        # Extract target column from training request
+        target_column = None
+        for line in training_request.split('\n'):
+            if 'Target Column:' in line:
+                target_column = line.split('Target Column:')[1].strip()
+                break
         
         # Run the orchestrator agent with the training context (include dataset_path so tool can self-heal)
         tool_context = SimpleNamespace(
             job_id=job_id,
             dataset_filename=os.path.basename(temp_file_path),
             dataset_path=temp_file_path,
+            target_column=target_column,
         )
         result = await Runner.run(job_orchestrator, training_request, context=tool_context, max_turns=50)
 
@@ -116,8 +123,10 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             handoff_request = (
                 f"Hand off to preprocessing agent for step {step_num}. "
                 f"Current dataset: '{current_csv}'. "
+                f"Target Column: {target_column}. "
                 f"The preprocessing agent should analyze the current dataset and execute the next logical preprocessing step. "
                 f"If this is step 1, do initial analysis and planning. If this is a later step, analyze the current data state and continue preprocessing. "
+                f"CRITICAL: Use target column '{target_column}' throughout preprocessing. "
                 f"Return the structured JSON result with output_csv for the next iteration."
             )
             
