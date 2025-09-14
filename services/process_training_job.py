@@ -137,7 +137,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         # Use latest_csv if available, otherwise use out_csv
         next_csv = latest_csv if latest_csv else out_csv
         
-        while next_csv and next_csv != current_csv and step_num <= max_steps and not preprocessing_complete:
+        while next_csv and step_num <= max_steps and not preprocessing_complete:
             current_csv = next_csv
             tool_context.dataset_filename = current_csv
             step_num += 1
@@ -159,15 +159,15 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             
             out_csv, latest_csv, step_data, preprocessing_complete = _extract_step_and_latest_csv(step_output)
             
+            if preprocessing_complete:
+                print(f"Step {step_num}: Preprocessing marked as complete by agent.")
+                break
+            
             # Use latest_csv if available, otherwise use out_csv
             next_csv = latest_csv if latest_csv else out_csv
             
             if not next_csv:
                 print(f"Step {step_num}: No output_csv or latest_csv found. Stopping preprocessing.")
-                break
-            
-            if preprocessing_complete:
-                print(f"Step {step_num}: Preprocessing marked as complete by agent.")
                 break
                 
             # Update for next iteration
