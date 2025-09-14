@@ -166,13 +166,30 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             # Update for next iteration
             out_csv = next_csv
 
-        # Update job with results after loop
+        # After preprocessing is complete, hand off to Master Training Agent
+        print(f"Preprocessing completed. Final dataset: {current_csv}")
+        print("Handing off to Master Training Agent for model training...")
+        
+        # Hand off to Master Training Agent
+        training_handoff_request = (
+            f"Hand off to Master Training Agent. "
+            f"Preprocessed dataset: '{current_csv}'. "
+            f"Target Column: {target_column}. "
+            f"Preprocessing complete with {step_num} steps. "
+            f"Please begin model selection and training pipeline."
+        )
+        
+        training_result = await Runner.run(job_orchestrator, training_handoff_request, context=tool_context, max_turns=50)
+        training_output = str(getattr(training_result, "final_output", ""))
+        
+        # Update job with results after training
         update_job_status(job_id, "completed", datetime.now().isoformat(),
                          result={
-                             "orchestrator_output": result.final_output if hasattr(result, 'final_output') else str(result),
+                             "preprocessing_output": result.final_output if hasattr(result, 'final_output') else str(result),
+                             "training_output": training_output,
                              "final_input_csv": current_csv,
-                             "step_results": step_results,
-                             "total_steps": step_num,
+                             "preprocessing_steps": step_results,
+                             "total_preprocessing_steps": step_num,
                          },
                          completed_at=datetime.now().isoformat())
         print(f"Training job {job_id} completed successfully")

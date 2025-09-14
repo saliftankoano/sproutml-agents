@@ -1,25 +1,25 @@
 from agents import Agent, function_tool
-from prompts import preprocessing_agent_prompt, orchestrator_prompt
+from prompts import (
+    preprocessing_agent_prompt, 
+    orchestrator_prompt, 
+    master_training_agent_prompt,
+    get_sub_training_agent_prompt,
+    evaluator_agent_prompt
+)
 from services.daytona_service import persistent_sandboxes, persistent_volumes, get_persistent_sandbox, create_sandbox
+from services.training_service import TrainingService
 from agents.tool_context import ToolContext
 from daytona import Sandbox
-from fastapi import HTTPException
 from typing import Optional
 import json
+import asyncio
 
 def create_preprocessor_agent():
     """Create a preprocessing agent with Daytona execution tool."""
-    hint = (
-        "You must emit two files per step: '\n"
-        "- preprocess.py: Python code for ONLY the current step, reading from the dataset filename in your CWD (provided below) and writing outputs (e.g., preprocessed_stepN.csv).\n"
-        "- requirements.txt: only the extra pip dependencies needed for this step (if any).\n\n"
-        "Then call the 'daytona_run_script' tool with arguments: script_name='preprocess.py', script=<file contents>, requirements=<requirements.txt contents or ''>, dataset_destination=<dataset filename>.\n\n"
-        "Dataset filename to use in code is provided in context; assume it's in your working directory. Do not use absolute paths.\n\n"
-    )
     return Agent(
         name="Preprocessing Agent",
         handoff_description="Agent specializing in preprocessing datasets",
-        instructions=hint + preprocessing_agent_prompt,
+        instructions=preprocessing_agent_prompt,
         tools=[daytona_run_script],
     )
 
@@ -138,24 +138,111 @@ def daytona_run_script(
             except Exception:
                 pass
 
-master_trainer_agent = Agent(
-    name="Master training Agent",
-    instructions="You determine which agent to use based on the user's homework question",
-)
+@function_tool
+def run_training_pipeline(
+    ctx: ToolContext,
+    dataset_filename: str,
+    target_column: str,
+    max_iterations: int = 3
+) -> str:
+    """Run the complete training pipeline with Master Training Agent orchestration.
+    
+    - dataset_filename: Name of the preprocessed dataset file
+    - target_column: Name of the target column for training
+    - max_iterations: Maximum number of improvement iterations (default: 3)
+    
+    Returns comprehensive training results and model artifacts.
+    """
+    try:
+        # Get job context
+        job_id = getattr(ctx.context, "job_id", None)
+        if not job_id:
+            return json.dumps({
+                "status": "error",
+                "message": "No job_id found in context"
+            })
+        
+        # Get sandbox for this job
+        sandbox = persistent_sandboxes.get(job_id)
+        if not sandbox:
+            return json.dumps({
+                "status": "error", 
+                "message": "No sandbox found for job"
+            })
+        
+        # Determine workspace path
+        try:
+            sandbox.process.exec("test -d /home/daytona/volume", cwd=".", timeout=10)
+            workspace = "/home/daytona/volume/workspace"
+        except Exception:
+            workspace = "/home/daytona/workspace"
+        
+        # Construct full dataset path
+        dataset_path = f"{workspace}/{dataset_filename}"
+        
+        # Create TrainingService and run pipeline
+        training_service = TrainingService()
+        
+        # Run the training pipeline asynchronously
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            result = loop.run_until_complete(
+                training_service.run_training_pipeline(
+                    dataset_path=dataset_path,
+                    target_column=target_column,
+                    ctx=ctx.context,
+                    max_iterations=max_iterations
+                )
+            )
+            
+            return json.dumps({
+                "status": "success",
+                "message": "Training pipeline completed successfully",
+                "results": result
+            })
+            
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": f"Training pipeline failed: {str(e)}"
+        })
 
-evaluator_agent = Agent(
-    name="Evaluator Agent",
-    instructions="You determine which agent to use based on the user's homework question",
-)
+def create_master_training_agent():
+    """Create the Master Training Agent that orchestrates model selection and training."""
+    return Agent(
+        name="Master Training Agent",
+        instructions=master_training_agent_prompt,
+        tools=[daytona_run_script, run_training_pipeline],
+    )
 
-tuning_agent = Agent(
-    name="Tuning Agent",
-    instructions="You determine which agent to use based on the user's homework question",
-)
+def create_sub_training_agent(model_name: str, model_category: str, dataset_characteristics: dict, performance_expectations: str):
+    """Create a specialized Sub Training Agent for a specific model."""
+    
+    prompt = get_sub_training_agent_prompt(model_name, model_category, dataset_characteristics, performance_expectations)
+    
+    return Agent(
+        name=f"{model_name} Training Agent",
+        instructions=prompt,
+        tools=[daytona_run_script],
+    )
+
+def create_evaluator_agent():
+    """Create the Evaluator Agent for performance analysis and tuning recommendations."""
+    return Agent(
+        name="Evaluator Agent",
+        instructions=evaluator_agent_prompt,
+        tools=[daytona_run_script],
+    )
+
 
 def create_orchestrator_agent():
     return Agent(
         name="Orchestrator Agent",
         instructions=orchestrator_prompt,
-        handoffs=[create_preprocessor_agent()],
+        handoffs=[create_preprocessor_agent(), create_master_training_agent()],
     )
