@@ -167,25 +167,46 @@ def _daytona_run_script_impl(
         except Exception:
             result = sandbox.process.exec(f"python3 {script_name}", cwd=ws, timeout=timeout)
 
-        # If using ephemeral sandbox, sync trained model files back to persistent sandbox
+        # If using ephemeral sandbox, sync trained model files (and other artifacts) back to persistent sandbox
         if eph_key and job_id and job_id in persistent_sandboxes:
             try:
                 src_sb: Sandbox = persistent_sandboxes[job_id]
-                # Sync trained model files back to persistent sandbox
+                # Sync trained model files back to persistent sandbox (search recursively up to depth 3)
                 try:
-                    model_files = sandbox.process.exec("ls -1 trained_*.pkl 2>/dev/null || echo ''", cwd=ws, timeout=20).result.strip()
+                    find_cmd = "sh -lc 'find . -maxdepth 3 -type f -name \"trained_*.pkl\" -printf \"%P\\n\" 2>/dev/null'"
+                    model_files = sandbox.process.exec(find_cmd, cwd=ws, timeout=30).result.strip()
                     if model_files:
-                        for model_file in model_files.split("\n"):
-                            model_file = model_file.strip()
-                            if model_file:
-                                try:
-                                    content = sandbox.fs.download_file(f"{ws}/{model_file}")
-                                    src_sb.fs.upload_file(content, f"{ws}/{model_file}")
-                                    print(f"Synced trained model {model_file} back to persistent sandbox")
-                                except Exception as e:
-                                    print(f"Failed to sync {model_file}: {e}")
+                        for relpath in model_files.split("\n"):
+                            relpath = relpath.strip()
+                            if not relpath:
+                                continue
+                            try:
+                                content = sandbox.fs.download_file(f"{ws}/{relpath}")
+                                # upload to same relative path to keep structure
+                                src_sb.fs.upload_file(content, f"{ws}/{relpath}")
+                                print(f"Synced trained model {relpath} back to persistent sandbox")
+                            except Exception as e:
+                                print(f"Failed to sync {relpath}: {e}")
                 except Exception as e:
                     print(f"Failed to list model files for sync: {e}")
+
+                # Best-effort: also sync evaluator outputs, logs, and plots (common extensions)
+                try:
+                    other_cmd = "sh -lc 'find . -maxdepth 2 -type f \\(" \
+                               "-name \"*.txt\" -o -name \"*.json\" -o -name \"*.png\" -o -name \"*.csv\" \\) " \
+                               "-printf \"%P\\n\" 2>/dev/null'"
+                    other_files = sandbox.process.exec(other_cmd, cwd=ws, timeout=30).result.strip()
+                    for relpath in (other_files or "").split("\n"):
+                        relpath = relpath.strip()
+                        if not relpath:
+                            continue
+                        try:
+                            content = sandbox.fs.download_file(f"{ws}/{relpath}")
+                            src_sb.fs.upload_file(content, f"{ws}/{relpath}")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             except Exception as e:
                 print(f"Failed to sync model files back to persistent sandbox: {e}")
 
