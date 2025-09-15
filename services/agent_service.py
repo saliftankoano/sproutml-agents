@@ -167,6 +167,28 @@ def _daytona_run_script_impl(
         except Exception:
             result = sandbox.process.exec(f"python3 {script_name}", cwd=ws, timeout=timeout)
 
+        # If using ephemeral sandbox, sync trained model files back to persistent sandbox
+        if eph_key and job_id and job_id in persistent_sandboxes:
+            try:
+                src_sb: Sandbox = persistent_sandboxes[job_id]
+                # Sync trained model files back to persistent sandbox
+                try:
+                    model_files = sandbox.process.exec("ls -1 trained_*.pkl 2>/dev/null || echo ''", cwd=ws, timeout=20).result.strip()
+                    if model_files:
+                        for model_file in model_files.split("\n"):
+                            model_file = model_file.strip()
+                            if model_file:
+                                try:
+                                    content = sandbox.fs.download_file(f"{ws}/{model_file}")
+                                    src_sb.fs.upload_file(content, f"{ws}/{model_file}")
+                                    print(f"Synced trained model {model_file} back to persistent sandbox")
+                                except Exception as e:
+                                    print(f"Failed to sync {model_file}: {e}")
+                except Exception as e:
+                    print(f"Failed to list model files for sync: {e}")
+            except Exception as e:
+                print(f"Failed to sync model files back to persistent sandbox: {e}")
+
         # Summarize workspace outputs for the agent to advance steps deterministically
         latest_csv = None
         try:
