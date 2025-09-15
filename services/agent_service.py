@@ -95,6 +95,23 @@ def _daytona_run_script_impl(
             sandbox.process.exec(f"mkdir -p {ws}", cwd=".", timeout=30)
         except Exception:
             pass
+
+        # If using ephemeral sandbox, try to sync shared artifacts from the persistent sandbox
+        if eph_key and job_id and job_id in persistent_sandboxes:
+            try:
+                src_sb: Sandbox = persistent_sandboxes[job_id]
+                # Files we need for training
+                needed = [
+                    "X_train.npy", "X_test.npy", "y_train.npy", "y_test.npy", "encoded_meta.json",
+                ]
+                for fname in needed:
+                    try:
+                        content = src_sb.fs.download_file(f"{ws}/{fname}")
+                        sandbox.fs.upload_file(content, f"{ws}/{fname}")
+                    except Exception:
+                        continue
+            except Exception:
+                pass
         # Upload script
         sandbox.fs.upload_file(script.encode("utf-8"), f"{ws}/{script_name}")
 

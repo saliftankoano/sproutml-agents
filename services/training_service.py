@@ -508,7 +508,7 @@ Return analysis in the specified JSON format.
                             print('Encoded dataset ready', meta['num_features'])
                         """
         from services.agent_service import daytona_direct
-        _ = daytona_direct(
+        enc_res = daytona_direct(
             ctx=ctx,
             script_name="create_shared_encoded.py",
             script=shared_script,
@@ -516,6 +516,11 @@ Return analysis in the specified JSON format.
             dataset_destination=None,
             timeout=480,
         )
+        try:
+            enc_json = json.loads(enc_res)
+            print("[Encoded]", enc_json.get("output", ""))
+        except Exception:
+            pass
 
         # Step 4: Create Sub Training Agents
         print("Step 4: Creating Sub Training Agents...")
