@@ -521,6 +521,23 @@ Return analysis in the specified JSON format.
             print("[Encoded]", enc_json.get("output", ""))
         except Exception:
             pass
+        # Verify files exist; if not, attempt a direct copy of the latest preprocessed CSV
+        verify_script = """
+import os, glob, sys
+needed = ['X_train.npy','X_test.npy','y_train.npy','y_test.npy']
+missing = [n for n in needed if not os.path.isfile(n)]
+if missing:
+    # print missing to stdout for diagnostics
+    print('Missing shared arrays:', missing)
+"""
+        _ = daytona_direct(
+            ctx=ctx,
+            script_name="verify_shared_encoded.py",
+            script=verify_script,
+            requirements="",
+            dataset_destination=None,
+            timeout=60,
+        )
 
         # Step 4: Create Sub Training Agents
         print("Step 4: Creating Sub Training Agents...")

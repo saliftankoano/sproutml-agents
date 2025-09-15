@@ -110,6 +110,20 @@ def _daytona_run_script_impl(
                         sandbox.fs.upload_file(content, f"{ws}/{fname}")
                     except Exception:
                         continue
+                # Also sync latest preprocessed CSVs for fallback
+                try:
+                    csv_list = src_sb.process.exec("sh -lc 'ls -1 preprocessed_step*.csv 2>/dev/null'", cwd=ws, timeout=15).result
+                    for line in (csv_list or "").splitlines():
+                        name = line.strip()
+                        if not name:
+                            continue
+                        try:
+                            content = src_sb.fs.download_file(f"{ws}/{name}")
+                            sandbox.fs.upload_file(content, f"{ws}/{name}")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             except Exception:
                 pass
         # Upload script
