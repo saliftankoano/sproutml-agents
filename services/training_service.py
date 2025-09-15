@@ -485,11 +485,11 @@ Return analysis in the specified JSON format.
                             np.save('y_train.npy', y_train.values)
                             np.save('y_test.npy', y_test.values)
 
-                            meta = {
+                            meta = {{
                             'num_features': int(X.shape[1]),
                             'columns': list(X.columns),
                             'dropped_high_cardinality': high_card_cols,
-                            }
+                            }}
                             with open('encoded_meta.json', 'w') as f:
                                 json.dump(meta, f, indent=2)
                             print('Encoded dataset ready', meta['num_features'])
