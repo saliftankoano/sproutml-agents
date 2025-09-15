@@ -22,6 +22,11 @@ def create_preprocessor_agent():
         tools=[daytona_agent_tool],
     )
 
+def _get_raw_context(ctx: ToolContext | object):
+    """Return the raw context object whether ctx is ToolContext or already a context object."""
+    return getattr(ctx, "context", ctx)
+
+
 def _daytona_run_script_impl(
     ctx: ToolContext,
     script_name: str,
@@ -40,7 +45,8 @@ def _daytona_run_script_impl(
 
     Returns combined stdout/stderr and exit_code as text.
     """
-    job_id = getattr(ctx.context, "job_id", None)
+    raw_ctx = _get_raw_context(ctx)
+    job_id = getattr(raw_ctx, "job_id", None)
     sandbox: Sandbox | None = None
     if job_id and job_id in persistent_sandboxes:
         sandbox = persistent_sandboxes[job_id]
@@ -78,8 +84,8 @@ def _daytona_run_script_impl(
         sandbox.fs.upload_file(script.encode("utf-8"), f"{ws}/{script_name}")
 
         # Upload dataset only if not already present and we have path on first call
-        ds_name = dataset_destination or getattr(ctx.context, "dataset_filename", None)
-        ds_path = getattr(ctx.context, "dataset_path", None)
+        ds_name = dataset_destination or getattr(raw_ctx, "dataset_filename", None)
+        ds_path = getattr(raw_ctx, "dataset_path", None)
         if ds_name:
             # Check if file exists already in persistent sandbox
             try:
@@ -168,7 +174,8 @@ def training_agent_tool(
     """
     try:
         # Get job context
-        job_id = getattr(ctx.context, "job_id", None)
+        raw_ctx = _get_raw_context(ctx)
+        job_id = getattr(raw_ctx, "job_id", None)
         if not job_id:
             return json.dumps({
                 "status": "error",
@@ -211,7 +218,7 @@ def training_agent_tool(
                     training_service.run_training_pipeline(
                         dataset_path=dataset_path,
                         target_column=target_column,
-                        ctx=ctx.context,
+                        ctx=raw_ctx,
                         max_iterations=max_iterations
                     )
                 )
