@@ -313,16 +313,19 @@ Train {model_name} model using a numerically encoded dataset.
 Dataset: {dataset_path}
 Target Column: {target_column}
 
-BEFORE training, VALIDATE the dataset columns:
-- If any categorical/object dtype features remain (e.g., strings like 'Walton', 'Belcher'), you MUST encode them first using pandas.get_dummies or OneHotEncoder.
-- Do NOT encode the target column.
-- Always ensure the resulting training matrix is numeric-only.
+BEFORE training, enforce strictly numeric features with memory-safe checks:
+- Detect object/category columns in features and encode them (pandas.get_dummies(drop_first=True) is acceptable). Convert bools to int (0/1). Never alter the target column.
+- For very high-cardinality text columns (e.g., free-form IDs/names with unique_ratio > 0.3), DROP them rather than expanding to thousands of dummies.
+- After encoding, verify numeric-only using dtypes, NOT DataFrame.applymap: use
+    all(np.issubdtype(dt, np.number) for dt in X.dtypes)
+  and cast to float where needed.
+- Avoid memory-heavy operations; DO NOT use DataFrame.applymap. Keep GridSearchCV with n_jobs=1.
 
 Then execute the training workflow:
-1. Load dataset and enforce numeric dtypes for features (auto-encode categoricals if present)
+1. Load dataset and enforce numeric-only features as above
 2. Implement {model_name} with initial hyperparameters
 3. Perform cross-validation
-4. Apply hyperparameter tuning
+4. Apply hyperparameter tuning (n_jobs=1)
 5. Train final model
 6. Generate performance metrics
 7. Save model artifacts including trained_{model_name.lower()}.pkl
