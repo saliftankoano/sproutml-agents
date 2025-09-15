@@ -544,11 +544,36 @@ if missing:
         
         # Step 5: Execute parallel training
         print("Step 5: Executing parallel training...")
+        # Snapshot files before training
+        try:
+            from services.daytona_service import get_persistent_sandbox
+            from services.job_service import get_job
+            sb = get_persistent_sandbox(getattr(ctx, 'job_id', ''))
+            ws = get_job(getattr(ctx, 'job_id', '')).get('daytona', {}).get('workspace', '/home/daytona/volume/workspace')
+            files_plain = sb.process.exec('ls -1', cwd=ws, timeout=20).result
+            train_files = [f for f in (files_plain or '').split('\n') if f.strip()]
+            from services.job_service import update_job_status
+            from datetime import datetime
+            update_job_status(getattr(ctx, 'job_id', ''), 'training', datetime.now().isoformat(), training_files=train_files)
+        except Exception:
+            pass
         training_results = await self.execute_parallel_training(sub_agents, dataset_path, target_column, ctx)
         
         # Step 6: Evaluate results
         print("Step 6: Evaluating results...")
         evaluation_results = await self.evaluate_results(training_results, characteristics, ctx)
+        # Snapshot files after evaluation
+        try:
+            from services.daytona_service import get_persistent_sandbox
+            from services.job_service import get_job, update_job_status
+            from datetime import datetime
+            sb = get_persistent_sandbox(getattr(ctx, 'job_id', ''))
+            ws = get_job(getattr(ctx, 'job_id', '')).get('daytona', {}).get('workspace', '/home/daytona/volume/workspace')
+            files_plain = sb.process.exec('ls -1', cwd=ws, timeout=20).result
+            eval_files = [f for f in (files_plain or '').split('\n') if f.strip()]
+            update_job_status(getattr(ctx, 'job_id', ''), 'training', datetime.now().isoformat(), evaluation_files=eval_files)
+        except Exception:
+            pass
         
         # Step 6: Iterative improvement (if needed)
         iteration = 1

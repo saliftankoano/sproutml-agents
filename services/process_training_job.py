@@ -1,5 +1,5 @@
 from services.daytona_service import get_persistent_volume, create_volume, get_persistent_sandbox, create_sandbox, wait_for_volume_ready
-from services.job_service import update_job_status
+from services.job_service import update_job_status, get_job
 from services.agent_service import create_preprocessor_agent, create_orchestrator_agent
 from agents import Runner
 from datetime import datetime
@@ -141,7 +141,15 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
         # Initial step result
         initial_output = str(getattr(result, "final_output", ""))
-        update_job_status(job_id, "preprocessing", datetime.now().isoformat(), latest_output=initial_output)
+        # Snapshot files at start of preprocessing
+        try:
+            sb = get_persistent_sandbox(job_id)
+            ws = get_job(job_id).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
+            files_plain = sb.process.exec("ls -1", cwd=ws, timeout=20).result
+            pre_files = [f for f in (files_plain or "").split("\n") if f.strip()]
+        except Exception:
+            pre_files = []
+        update_job_status(job_id, "preprocessing", datetime.now().isoformat(), latest_output=initial_output, preprocessing_files=pre_files)
         step_results.append(f"Initial: {initial_output}")
         
         out_csv, latest_csv, _, preprocessing_complete = _extract_step_and_latest_csv(initial_output)
@@ -172,7 +180,15 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             result = await Runner.run(preprocessor_agent, handoff_request, context=tool_context, max_turns=50)
             step_output = str(getattr(result, "final_output", ""))
             step_results.append(f"Step {step_num}: {step_output}")
-            update_job_status(job_id, "preprocessing", datetime.now().isoformat(), latest_output=step_output)
+            # Snapshot files after each preprocessing step
+            try:
+                sb = get_persistent_sandbox(job_id)
+                ws = get_job(job_id).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
+                files_plain = sb.process.exec("ls -1", cwd=ws, timeout=20).result
+                pre_files = [f for f in (files_plain or "").split("\n") if f.strip()]
+            except Exception:
+                pre_files = []
+            update_job_status(job_id, "preprocessing", datetime.now().isoformat(), latest_output=step_output, preprocessing_files=pre_files)
             
             out_csv, latest_csv, step_data, preprocessing_complete = _extract_step_and_latest_csv(step_output)
             
@@ -203,9 +219,17 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             training_dataset = training_file
             print(f"Extracted training dataset: {training_dataset}")
         
-        # Update status to training before starting
+        # Update status to training before starting (with file snapshot)
+        try:
+            sb = get_persistent_sandbox(job_id)
+            ws = get_job(job_id).get("daytona", {}).get("workspace", "/home/daytona/volume/workspace")
+            files_plain = sb.process.exec("ls -1", cwd=ws, timeout=20).result
+            train_files = [f for f in (files_plain or "").split("\n") if f.strip()]
+        except Exception:
+            train_files = []
         update_job_status(job_id, "training", datetime.now().isoformat(), 
-                         latest_output=f"Starting training with dataset: {training_dataset}")
+                         latest_output=f"Starting training with dataset: {training_dataset}",
+                         training_files=train_files)
         
         # Hand off to Master Training Agent
         training_handoff_request = (
