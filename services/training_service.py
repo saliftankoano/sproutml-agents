@@ -308,19 +308,24 @@ class TrainingService:
                 model_name = agent_info['model_name']
                 
                 training_request = f"""
-Train {model_name} model on the preprocessed dataset.
+Train {model_name} model using a numerically encoded dataset.
 
 Dataset: {dataset_path}
 Target Column: {target_column}
 
-Execute the complete training workflow:
-1. Load preprocessed dataset
+BEFORE training, VALIDATE the dataset columns:
+- If any categorical/object dtype features remain (e.g., strings like 'Walton', 'Belcher'), you MUST encode them first using pandas.get_dummies or OneHotEncoder.
+- Do NOT encode the target column.
+- Always ensure the resulting training matrix is numeric-only.
+
+Then execute the training workflow:
+1. Load dataset and enforce numeric dtypes for features (auto-encode categoricals if present)
 2. Implement {model_name} with initial hyperparameters
 3. Perform cross-validation
 4. Apply hyperparameter tuning
 5. Train final model
 6. Generate performance metrics
-7. Save model artifacts
+7. Save model artifacts including trained_{model_name.lower()}.pkl
 
 Return results in the specified JSON format.
 """
