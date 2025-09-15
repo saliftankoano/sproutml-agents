@@ -199,15 +199,35 @@ def training_agent_tool(
         
         # Construct full dataset path
         dataset_path = f"{workspace}/{dataset_filename}"
+
+        # Prefer the latest preprocessed CSV if the provided file is missing or not a preprocessed file
+        try:
+            # Check if provided file exists
+            exists_check = sandbox.process.exec(
+                f"sh -lc 'test -f {dataset_filename} && echo EXIST || echo MISSING'",
+                cwd=workspace,
+                timeout=10,
+            ).result.strip()
+            needs_discovery = exists_check != "EXIST" or not dataset_filename.startswith("preprocessed_")
+            if needs_discovery:
+                # Prefer train split if available, otherwise any preprocessed_step*.csv
+                latest_pre = sandbox.process.exec(
+                    "sh -lc 'ls -1t preprocessed_step*_train.csv preprocessed_step*.csv 2>/dev/null | head -1'",
+                    cwd=workspace,
+                    timeout=20,
+                ).result.strip()
+                if latest_pre:
+                    dataset_filename = latest_pre
+                    dataset_path = f"{workspace}/{dataset_filename}"
+        except Exception:
+            pass
         
         # Create TrainingService and run pipeline (import locally to avoid circular dependency)
         from services.training_service import TrainingService
         training_service = TrainingService()
         
         # Run the training pipeline asynchronously
-        # Use a more robust approach to handle event loops
         import concurrent.futures
-        import threading
         
         def run_in_new_loop():
             """Run the training pipeline in a new event loop in a separate thread"""
@@ -233,7 +253,8 @@ def training_agent_tool(
         return json.dumps({
             "status": "success",
             "message": "Training pipeline completed successfully",
-            "results": result
+            "results": result,
+            "selected_dataset": dataset_filename
         })
             
     except Exception as e:
