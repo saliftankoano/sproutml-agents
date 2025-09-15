@@ -19,10 +19,17 @@ async def list_jobs():
 @router.get("/job/{job_id}")
 async def get_job_status(job_id: str):
     """Get the status of a training job"""
-    if get_job(job_id) is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    return get_job(job_id)
+    try:
+        job_data = get_job(job_id)
+        if job_data is None:
+            print(f"Job {job_id} not found in job store")
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        print(f"Returning job status for {job_id}: {job_data.get('status', 'unknown')}")
+        return job_data
+    except Exception as e:
+        print(f"Error getting job status for {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving job status: {e}")
 
 @router.get("/job/{job_id}/artifact/{filename:path}")
 async def download_job_artifact(job_id: str, filename: str):

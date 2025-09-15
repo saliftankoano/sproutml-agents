@@ -306,7 +306,6 @@ class TrainingService:
             try:
                 agent = agent_info['agent']
                 model_name = agent_info['model_name']
-                # Provide ephemeral sandbox hints for this model (optimized for speed)
                 ctx.sandbox_key = f"trainer-{model_name.lower()}"
                 ctx.sandbox_cpu = 4  # 4 CPU cores
                 ctx.sandbox_memory = 8  # 8GB RAM
@@ -601,7 +600,11 @@ if missing:
                 except Exception as e:
                     print(f"Error parsing model result: {e}")
         
-        return {
+        # Update job status to completed with final results
+        from services.job_service import update_job_status
+        from datetime import datetime
+        
+        final_result = {
             'characteristics': characteristics,
             'selected_models': selected_models,
             'final_results': evaluation_results,
@@ -610,3 +613,14 @@ if missing:
             'model_files_ready': len(trained_models) > 0,
             'status': 'completed'
         }
+        
+        # Update job status to completed
+        if hasattr(ctx, 'job_id') and ctx.job_id:
+            update_job_status(
+                ctx.job_id, 
+                "completed", 
+                datetime.now().isoformat(),
+                result=final_result
+            )
+        
+        return final_result

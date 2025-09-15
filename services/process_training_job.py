@@ -235,7 +235,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         # Update job with results after training
         update_job_status(job_id, "completed", datetime.now().isoformat(),
                          result={
-                             "preprocessing_output": result.final_output if hasattr(result, 'final_output') else str(result),
+                             "preprocessing_output": training_result.final_output if hasattr(training_result, 'final_output') else str(training_result),
                              "training_output": training_output,
                              "final_input_csv": current_csv,
                              "training_dataset": training_dataset,
