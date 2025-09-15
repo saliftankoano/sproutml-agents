@@ -202,27 +202,27 @@ Call run_training_pipeline with:
 def get_sub_training_agent_prompt(model_name: str, model_category: str, dataset_characteristics: dict, performance_expectations: str) -> str:
     """Generate dynamic prompt for Sub Training Agent based on model and dataset characteristics."""
     
-    # Model-specific hyperparameter ranges and strategies
+    # Model-specific hyperparameter ranges and strategies (optimized for speed)
     model_configs = {
         "RandomForest": {
-            "hyperparams": "n_estimators (50-500), max_depth (3-20), min_samples_split (2-20), min_samples_leaf (1-10)",
-            "strategy": "Focus on ensemble diversity and overfitting prevention"
+            "hyperparams": "n_estimators (50-200), max_depth (3-10), min_samples_split (2-10), min_samples_leaf (1-5)",
+            "strategy": "Focus on ensemble diversity and overfitting prevention with reduced search space"
         },
         "XGBoost": {
-            "hyperparams": "n_estimators (50-1000), learning_rate (0.01-0.3), max_depth (3-10), subsample (0.6-1.0)",
-            "strategy": "Optimize for gradient boosting performance with early stopping"
+            "hyperparams": "n_estimators (50-300), learning_rate (0.05-0.2), max_depth (3-6), subsample (0.8-1.0)",
+            "strategy": "Optimize for gradient boosting performance with early stopping and reduced grid"
         },
         "LogisticRegression": {
-            "hyperparams": "C (0.01-100), penalty (l1, l2, elasticnet), solver (liblinear, lbfgs, saga)",
-            "strategy": "Focus on regularization strength and feature selection"
+            "hyperparams": "C (0.1-10), penalty (l1, l2), solver (liblinear, lbfgs)",
+            "strategy": "Focus on regularization strength with simplified solver options"
         },
         "SVC": {
-            "hyperparams": "C (0.1-100), kernel (linear, rbf, poly), gamma (scale, auto, 0.001-1.0)",
-            "strategy": "Optimize kernel selection and regularization for non-linear patterns"
+            "hyperparams": "C (0.1-10), kernel (linear, rbf), gamma (scale, auto)",
+            "strategy": "Optimize kernel selection with reduced parameter space for speed"
         },
         "MLPClassifier": {
-            "hyperparams": "hidden_layer_sizes (50-500), activation (relu, tanh), alpha (0.0001-0.1), learning_rate (constant, adaptive)",
-            "strategy": "Focus on network architecture and learning rate optimization"
+            "hyperparams": "hidden_layer_sizes (50-200), activation (relu), alpha (0.0001-0.01), learning_rate (constant)",
+            "strategy": "Focus on network architecture with simplified activation and learning rate"
         }
     }
     
@@ -249,15 +249,22 @@ YOUR EXPERTISE:
 - Hyperparameter Ranges: {config['hyperparams']}
 - Optimization Strategy: {config['strategy']}
 
-TRAINING WORKFLOW:
+TRAINING WORKFLOW (OPTIMIZED FOR SPEED):
 1. Load preprocessed dataset from workspace
 2. Implement {model_name} with initial hyperparameters
-3. Perform cross-validation to assess baseline performance
-4. Apply hyperparameter tuning using GridSearchCV or RandomizedSearchCV
+3. Perform cross-validation to assess baseline performance (use 3-fold CV for speed)
+4. Apply hyperparameter tuning using RandomizedSearchCV with n_iter=20 (faster than GridSearchCV)
 5. Train final model with best parameters
 6. Generate performance metrics and model artifacts
 7. Save trained model as pickle file: trained_{model_name.lower()}.pkl
 8. Save model metadata and results
+
+SPEED OPTIMIZATIONS:
+- Use RandomizedSearchCV instead of GridSearchCV (n_iter=20)
+- Use 3-fold cross-validation instead of 5-fold
+- Limit hyperparameter search space (see ranges above)
+- Use n_jobs=1 to avoid memory issues
+- Focus on most impactful parameters only
 
 OUTPUT FORMAT:
 {{

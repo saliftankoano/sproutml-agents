@@ -203,6 +203,10 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             training_dataset = training_file
             print(f"Extracted training dataset: {training_dataset}")
         
+        # Update status to training before starting
+        update_job_status(job_id, "training", datetime.now().isoformat(), 
+                         latest_output=f"Starting training with dataset: {training_dataset}")
+        
         # Hand off to Master Training Agent
         training_handoff_request = (
             f"Hand off to Master Training Agent. "

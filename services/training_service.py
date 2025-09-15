@@ -306,10 +306,10 @@ class TrainingService:
             try:
                 agent = agent_info['agent']
                 model_name = agent_info['model_name']
-                # Provide ephemeral sandbox hints for this model
+                # Provide ephemeral sandbox hints for this model (optimized for speed)
                 ctx.sandbox_key = f"trainer-{model_name.lower()}"
-                ctx.sandbox_cpu = 2
-                ctx.sandbox_memory = 4
+                ctx.sandbox_cpu = 4  # 4 CPU cores
+                ctx.sandbox_memory = 8  # 8GB RAM
                 
                 training_request = f"""
 Train {model_name} model using the shared encoded dataset when available.
@@ -400,26 +400,26 @@ Return results in the specified JSON format.
         
         # Prepare evaluation request
         evaluation_request = f"""
-Analyze the results from {len(training_results)} trained models.
+                                Analyze the results from {len(training_results)} trained models.
 
-Dataset Characteristics:
-- Problem Type: {characteristics.get('problem_type', 'Unknown')}
-- Size: {characteristics.get('size', 'Unknown')} samples
-- Target Column: {characteristics.get('target_column', 'Unknown')}
-- Balanced: {characteristics.get('is_balanced', 'Unknown')}
+                                Dataset Characteristics:
+                                - Problem Type: {characteristics.get('problem_type', 'Unknown')}
+                                - Size: {characteristics.get('size', 'Unknown')} samples
+                                - Target Column: {characteristics.get('target_column', 'Unknown')}
+                                - Balanced: {characteristics.get('is_balanced', 'Unknown')}
 
-Training Results:
-{json.dumps(training_results, indent=2)}
+                                Training Results:
+                                {json.dumps(training_results, indent=2)}
 
-Please:
-1. Establish the most important metric based on dataset context
-2. Rank all models by performance
-3. Identify strengths and weaknesses
-4. Generate model-specific tuning recommendations
-5. Assess convergence potential
+                                Please:
+                                1. Establish the most important metric based on dataset context
+                                2. Rank all models by performance
+                                3. Identify strengths and weaknesses
+                                4. Generate model-specific tuning recommendations
+                                5. Assess convergence potential
 
-Return analysis in the specified JSON format.
-"""
+                                Return analysis in the specified JSON format.
+                            """
         
         result = await Runner.run(self.evaluator_agent, evaluation_request, context=ctx, max_turns=10)
         
