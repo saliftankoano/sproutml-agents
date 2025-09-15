@@ -313,22 +313,69 @@ Train {model_name} model using a numerically encoded dataset.
 Dataset: {dataset_path}
 Target Column: {target_column}
 
-BEFORE training, enforce strictly numeric features with memory-safe checks:
-- Detect object/category columns in features and encode them (pandas.get_dummies(drop_first=True) is acceptable). Convert bools to int (0/1). Never alter the target column.
-- For very high-cardinality text columns (e.g., free-form IDs/names with unique_ratio > 0.3), DROP them rather than expanding to thousands of dummies.
-- After encoding, verify numeric-only using dtypes, NOT DataFrame.applymap: use
-    all(np.issubdtype(dt, np.number) for dt in X.dtypes)
-  and cast to float where needed.
-- Avoid memory-heavy operations; DO NOT use DataFrame.applymap. Keep GridSearchCV with n_jobs=1.
+BEFORE training, enforce strictly numeric features with memory-safe checks. Use this exact pattern (adapt/extend as needed):
+```python
+import numpy as np
+import pandas as pd
+
+df = pd.read_csv('{dataset_path}')
+target_col = '{target_column}'
+features = df.drop(columns=[target_col])
+y = df[target_col]
+
+# 1) Normalize booleans → int
+for col in features.select_dtypes(include=['bool']).columns:
+    features[col] = features[col].astype('int8')
+
+# 2) Coerce numeric-like strings
+for col in features.columns:
+    if features[col].dtype == 'object':
+        # Try to coerce numeric entries silently; non-numeric will remain object
+        coerced = pd.to_numeric(features[col], errors='ignore')
+        features[col] = coerced
+
+# 3) Handle remaining object/category columns
+obj_cols = features.select_dtypes(include=['object', 'category']).columns.tolist()
+high_card_cols = []
+to_dummy_cols = []
+for col in obj_cols:
+    nunique = features[col].nunique(dropna=True)
+    ratio = nunique / max(1, len(features))
+    if ratio > 0.3 or any(tok in col.lower() for tok in ['id','uuid','name','surname','email','phone']):
+        high_card_cols.append(col)
+    else:
+        to_dummy_cols.append(col)
+
+# Drop high-cardinality identifiers
+if high_card_cols:
+    features = features.drop(columns=high_card_cols)
+
+# One-hot encode the rest (fillna to avoid NaN dummies)
+if to_dummy_cols:
+    features[to_dummy_cols] = features[to_dummy_cols].fillna('__missing__')
+    features = pd.get_dummies(features, columns=to_dummy_cols, drop_first=True)
+
+# 4) Final numeric-only enforcement and downcast to float32
+if not all(np.issubdtype(dt, np.number) for dt in features.dtypes):
+    # As a last resort, drop any non-numeric leftovers
+    non_numeric = [c for c in features.columns if not np.issubdtype(features[c].dtype, np.number)]
+    features = features.drop(columns=non_numeric)
+
+X = features.astype('float32')
+```
+
+IMPORTANT:
+- DO NOT modify or encode the target column.
+- DO NOT use DataFrame.applymap.
+- Keep GridSearchCV/RandomizedSearchCV with n_jobs=1 and limit grids/folds (e.g., 3 folds). If dataset is large, sample for search then refit on full train.
 
 Then execute the training workflow:
-1. Load dataset and enforce numeric-only features as above
-2. Implement {model_name} with initial hyperparameters
-3. Perform cross-validation
-4. Apply hyperparameter tuning (n_jobs=1)
-5. Train final model
-6. Generate performance metrics
-7. Save model artifacts including trained_{model_name.lower()}.pkl
+1. Implement {model_name} with sensible defaults
+2. 3-fold cross-validation
+3. Randomized or small GridSearch (n_jobs=1)
+4. Train final model
+5. Generate performance metrics
+6. Save model artifacts including trained_{model_name.lower()}.pkl
 
 Return results in the specified JSON format.
 """
