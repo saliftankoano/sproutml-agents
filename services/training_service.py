@@ -306,6 +306,10 @@ class TrainingService:
             try:
                 agent = agent_info['agent']
                 model_name = agent_info['model_name']
+                # Provide ephemeral sandbox hints for this model
+                ctx.sandbox_key = f"trainer-{model_name.lower()}"
+                ctx.sandbox_cpu = 2
+                ctx.sandbox_memory = 4
                 
                 training_request = f"""
 Train {model_name} model using the shared encoded dataset when available.
@@ -375,10 +379,19 @@ Return results in the specified JSON format.
                     'agent': agent_info
                 }
         
-        # Execute all training tasks in parallel
-        training_tasks = [train_single_agent(agent_info) for agent_info in sub_agents]
-        results = await asyncio.gather(*training_tasks, return_exceptions=True)
-        
+        # Execute all training tasks, streaming results as they finish
+        tasks = [asyncio.create_task(train_single_agent(a)) for a in sub_agents]
+        results: List[Dict[str, Any]] = []
+        from services.job_service import update_job_status
+        from datetime import datetime
+        for task in asyncio.as_completed(tasks):
+            res = await task
+            results.append(res)
+            try:
+                # Push incremental result to the job record for UI
+                update_job_status(getattr(ctx, 'job_id', 'unknown'), "training", datetime.now().isoformat(), latest_model_result=res)
+            except Exception:
+                pass
         return results
     
     async def evaluate_results(self, training_results: List[Dict[str, Any]], 

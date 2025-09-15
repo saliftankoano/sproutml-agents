@@ -141,6 +141,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
         
         # Initial step result
         initial_output = str(getattr(result, "final_output", ""))
+        update_job_status(job_id, "preprocessing", datetime.now().isoformat(), latest_output=initial_output)
         step_results.append(f"Initial: {initial_output}")
         
         out_csv, latest_csv, _, preprocessing_complete = _extract_step_and_latest_csv(initial_output)
@@ -171,6 +172,7 @@ async def process_training_job(job_id: str, training_request: str, temp_file_pat
             result = await Runner.run(preprocessor_agent, handoff_request, context=tool_context, max_turns=50)
             step_output = str(getattr(result, "final_output", ""))
             step_results.append(f"Step {step_num}: {step_output}")
+            update_job_status(job_id, "preprocessing", datetime.now().isoformat(), latest_output=step_output)
             
             out_csv, latest_csv, step_data, preprocessing_complete = _extract_step_and_latest_csv(step_output)
             

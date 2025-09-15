@@ -6,7 +6,14 @@ from prompts import (
     get_sub_training_agent_prompt,
     evaluator_agent_prompt
 )
-from services.daytona_service import persistent_sandboxes, persistent_volumes, get_persistent_sandbox, create_sandbox
+from services.daytona_service import (
+    persistent_sandboxes,
+    persistent_volumes,
+    get_persistent_sandbox,
+    create_sandbox,
+    create_ephemeral_sandbox,
+    get_ephemeral_sandbox,
+)
 from agents.tool_context import ToolContext
 from daytona import Sandbox
 from typing import Optional
@@ -48,7 +55,15 @@ def _daytona_run_script_impl(
     raw_ctx = _get_raw_context(ctx)
     job_id = getattr(raw_ctx, "job_id", None)
     sandbox: Sandbox | None = None
-    if job_id and job_id in persistent_sandboxes:
+    # Optional ephemeral key and resource hints
+    eph_key = getattr(raw_ctx, "sandbox_key", None)
+    eph_cpu = getattr(raw_ctx, "sandbox_cpu", None)
+    eph_mem = getattr(raw_ctx, "sandbox_memory", None)
+    if eph_key:
+        sandbox = get_ephemeral_sandbox(job_id, eph_key) or create_ephemeral_sandbox(
+            job_id, eph_key, cpu=eph_cpu or 2, memory=eph_mem or 4
+        )
+    elif job_id and job_id in persistent_sandboxes:
         sandbox = persistent_sandboxes[job_id]
     else:
         # Create ad-hoc sandbox mounted to the job's volume if present

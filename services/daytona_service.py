@@ -1,4 +1,10 @@
 from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams, VolumeMount, Sandbox
+try:
+    from daytona import Resources, CreateSandboxFromImageParams, Image  
+except Exception: 
+    Resources = None  
+    CreateSandboxFromImageParams = None  # type: ignore
+    Image = None  # type: ignore
 from config import DAYTONA_KEY
 from typing import Dict, Any
 
@@ -6,6 +12,8 @@ daytona = Daytona(DaytonaConfig(api_key=DAYTONA_KEY))
 
 persistent_sandboxes: Dict[str, Any] = {}
 persistent_volumes: Dict[str, Any] = {}
+# Ephemeral sandboxes (e.g., per sub-trainer) keyed by (job_id, key)
+ephemeral_sandboxes: Dict[tuple[str, str], Any] = {}
 
 
 def create_volume(job_id: str):
@@ -106,6 +114,51 @@ def create_sandbox(job_id: str):
             except Exception as fallback_e:
                 print(f"Fallback sandbox creation failed for job {job_id}: {fallback_e}")
                 return None
+        return None
+
+def create_ephemeral_sandbox(job_id: str, key: str, cpu: int = 2, memory: int = 4, disk: int = 3):
+    """Create or return an ephemeral sandbox for a sub-task under a job.
+    Tries to allocate more resources if supported by the SDK, else falls back to snapshot params.
+    """
+    # Reuse if already exists
+    if (job_id, key) in ephemeral_sandboxes:
+        return ephemeral_sandboxes[(job_id, key)]
+
+    volume = get_volume(job_id)
+    try:
+        if Resources and CreateSandboxFromImageParams and Image:
+            resources = Resources(cpu=cpu, memory=memory, disk=disk)  # type: ignore
+            params = CreateSandboxFromImageParams(  # type: ignore
+                image=Image.debian_slim("3.12"),  # lightweight image
+                resources=resources,
+            )
+            sandbox = daytona.create(params)
+            # Mount volume if available
+            if volume is not None and hasattr(sandbox, "mount_volume"):
+                try:
+                    sandbox.mount_volume(volume.id, "/home/daytona/volume")  # type: ignore
+                except Exception:
+                    pass
+        else:
+            # Fallback to snapshot params (no custom resources)
+            if volume is None:
+                params = CreateSandboxFromSnapshotParams(language="python")
+            else:
+                params = CreateSandboxFromSnapshotParams(
+                    language="python",
+                    volumes=[VolumeMount(volumeId=volume.id, mountPath="/home/daytona/volume")],
+                )
+            sandbox = daytona.create(params)
+        ephemeral_sandboxes[(job_id, key)] = sandbox
+        return sandbox
+    except Exception as e:
+        print(f"Error creating ephemeral sandbox for {job_id}:{key}: {e}")
+        return None
+
+def get_ephemeral_sandbox(job_id: str, key: str):
+    try:
+        return ephemeral_sandboxes[(job_id, key)]
+    except Exception:
         return None
 
 def get_sandbox(job_id: str):
