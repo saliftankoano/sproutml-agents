@@ -126,6 +126,12 @@ def _daytona_run_script_impl(
                     pass
             except Exception:
                 pass
+        # Ensure base ML dependencies are present (best-effort)
+        try:
+            sandbox.process.exec("pip install -q numpy pandas scikit-learn xgboost", cwd=ws, timeout=420)
+        except Exception:
+            pass
+
         # Upload script
         sandbox.fs.upload_file(script.encode("utf-8"), f"{ws}/{script_name}")
 
