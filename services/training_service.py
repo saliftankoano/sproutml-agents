@@ -308,66 +308,44 @@ class TrainingService:
                 model_name = agent_info['model_name']
                 
                 training_request = f"""
-Train {model_name} model using a numerically encoded dataset.
+Train {model_name} model using the shared encoded dataset when available.
 
-Dataset: {dataset_path}
+Shared arrays (preferred): X_train.npy, X_test.npy, y_train.npy, y_test.npy in the workspace root.
+Fallback: If any are missing, load '{dataset_path}', then perform the numeric-only encoding steps described below.
+
 Target Column: {target_column}
 
-BEFORE training, enforce strictly numeric features with memory-safe checks. Use this exact pattern (adapt/extend as needed):
+Loading logic:
 ```python
-import numpy as np
-import pandas as pd
-
-df = pd.read_csv('{dataset_path}')
-target_col = '{target_column}'
-features = df.drop(columns=[target_col])
-y = df[target_col]
-
-# 1) Normalize booleans → int
-for col in features.select_dtypes(include=['bool']).columns:
-    features[col] = features[col].astype('int8')
-
-# 2) Coerce numeric-like strings
-for col in features.columns:
-    if features[col].dtype == 'object':
-        # Try to coerce numeric entries silently; non-numeric will remain object
-        coerced = pd.to_numeric(features[col], errors='ignore')
-        features[col] = coerced
-
-# 3) Handle remaining object/category columns
-obj_cols = features.select_dtypes(include=['object', 'category']).columns.tolist()
-high_card_cols = []
-to_dummy_cols = []
-for col in obj_cols:
-    nunique = features[col].nunique(dropna=True)
-    ratio = nunique / max(1, len(features))
-    if ratio > 0.3 or any(tok in col.lower() for tok in ['id','uuid','name','surname','email','phone']):
-        high_card_cols.append(col)
-    else:
-        to_dummy_cols.append(col)
-
-# Drop high-cardinality identifiers
-if high_card_cols:
-    features = features.drop(columns=high_card_cols)
-
-# One-hot encode the rest (fillna to avoid NaN dummies)
-if to_dummy_cols:
-    features[to_dummy_cols] = features[to_dummy_cols].fillna('__missing__')
-    features = pd.get_dummies(features, columns=to_dummy_cols, drop_first=True)
-
-# 4) Final numeric-only enforcement and downcast to float32
-if not all(np.issubdtype(dt, np.number) for dt in features.dtypes):
-    # As a last resort, drop any non-numeric leftovers
-    non_numeric = [c for c in features.columns if not np.issubdtype(features[c].dtype, np.number)]
-    features = features.drop(columns=non_numeric)
-
-X = features.astype('float32')
+import numpy as np, os, pandas as pd
+if all(os.path.isfile(p) for p in ['X_train.npy','X_test.npy','y_train.npy','y_test.npy']):
+    X_train = np.load('X_train.npy'); X_test = np.load('X_test.npy')
+    y_train = np.load('y_train.npy'); y_test = np.load('y_test.npy')
+else:
+    # Fallback: build numeric-only features from CSV (memory-safe)
+    df = pd.read_csv('{dataset_path}')
+    target_col = '{target_column}'
+    features = df.drop(columns=[target_col]); y = df[target_col]
+    for col in features.select_dtypes(include=['bool']).columns: features[col] = features[col].astype('int8')
+    for col in features.columns:
+        if features[col].dtype == 'object': features[col] = pd.to_numeric(features[col], errors='ignore')
+    obj_cols = features.select_dtypes(include=['object','category']).columns.tolist()
+    high_card, to_dummy = [], []
+    for col in obj_cols:
+        nu = features[col].nunique(dropna=True); ratio = nu/max(1,len(features))
+        (high_card if ratio>0.3 or any(t in col.lower() for t in ['id','uuid','name','surname','email','phone']) else to_dummy).append(col)
+    if high_card: features = features.drop(columns=high_card)
+    if to_dummy:
+        features[to_dummy] = features[to_dummy].fillna('__missing__')
+        features = pd.get_dummies(features, columns=to_dummy, drop_first=True)
+    X = features.astype('float32')
+    from sklearn.model_selection import train_test_split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 ```
 
 IMPORTANT:
-- DO NOT modify or encode the target column.
-- DO NOT use DataFrame.applymap.
-- Keep GridSearchCV/RandomizedSearchCV with n_jobs=1 and limit grids/folds (e.g., 3 folds). If dataset is large, sample for search then refit on full train.
+- Do NOT modify the target column.
+- Keep GridSearchCV/RandomizedSearchCV with n_jobs=1 and small grids/folds (cv=3). If large, sample for search then refit on full train.
 
 Then execute the training workflow:
 1. Implement {model_name} with sensible defaults
@@ -453,16 +431,89 @@ Return analysis in the specified JSON format.
         selected_models = self.select_top_5_models(characteristics)
         print(f"Selected models: {[m['name'] for m in selected_models]}")
         
-        # Step 3: Create Sub Training Agents
-        print("Step 3: Creating Sub Training Agents...")
+        # Step 3: Build shared encoded dataset once (X_train.npy/X_test.npy/y_train.npy/y_test.npy)
+        print("Step 3: Creating shared encoded dataset (one-time)...")
+        shared_script = f"""
+                            import pandas as pd
+                            import numpy as np
+                            import json
+                            from sklearn.model_selection import train_test_split
+
+                            DATASET = r"{dataset_path}"
+                            TARGET = r"{target_column}"
+
+                            df = pd.read_csv(DATASET)
+                            features = df.drop(columns=[TARGET])
+                            y = df[TARGET]
+
+                            # Booleans → int
+                            for col in features.select_dtypes(include=['bool']).columns:
+                                features[col] = features[col].astype('int8')
+
+                            # Try coerce numeric-like strings
+                            for col in features.columns:
+                                if features[col].dtype == 'object':
+                                    coerced = pd.to_numeric(features[col], errors='ignore')
+                                    features[col] = coerced
+
+                            # Identify object/category columns
+                            obj_cols = features.select_dtypes(include=['object','category']).columns.tolist()
+                            high_card_cols = []
+                            to_dummy_cols = []
+                            for col in obj_cols:
+                                nunique = features[col].nunique(dropna=True)
+                                ratio = nunique / max(1, len(features))
+                                if ratio > 0.3 or any(tok in col.lower() for tok in ['id','uuid','name','surname','email','phone']):
+                                    high_card_cols.append(col)
+                                else:
+                                    to_dummy_cols.append(col)
+
+                            if high_card_cols:
+                                features = features.drop(columns=high_card_cols)
+
+                            if to_dummy_cols:
+                                features[to_dummy_cols] = features[to_dummy_cols].fillna('__missing__')
+                                features = pd.get_dummies(features, columns=to_dummy_cols, drop_first=True)
+
+                            X = features.astype('float32')
+
+                            X_train, X_test, y_train, y_test = train_test_split(
+                                X, y, test_size=0.2, stratify=y, random_state=42)
+
+                            np.save('X_train.npy', X_train.values)
+                            np.save('X_test.npy', X_test.values)
+                            np.save('y_train.npy', y_train.values)
+                            np.save('y_test.npy', y_test.values)
+
+                            meta = {
+                            'num_features': int(X.shape[1]),
+                            'columns': list(X.columns),
+                            'dropped_high_cardinality': high_card_cols,
+                            }
+                            with open('encoded_meta.json', 'w') as f:
+                                json.dump(meta, f, indent=2)
+                            print('Encoded dataset ready', meta['num_features'])
+                        """
+        from services.agent_service import daytona_direct
+        _ = daytona_direct(
+            ctx=ctx,
+            script_name="create_shared_encoded.py",
+            script=shared_script,
+            requirements="pandas numpy scikit-learn",
+            dataset_destination=None,
+            timeout=480,
+        )
+
+        # Step 4: Create Sub Training Agents
+        print("Step 4: Creating Sub Training Agents...")
         sub_agents = await self.create_sub_training_agents(selected_models, characteristics)
         
-        # Step 4: Execute parallel training
-        print("Step 4: Executing parallel training...")
+        # Step 5: Execute parallel training
+        print("Step 5: Executing parallel training...")
         training_results = await self.execute_parallel_training(sub_agents, dataset_path, target_column, ctx)
         
-        # Step 5: Evaluate results
-        print("Step 5: Evaluating results...")
+        # Step 6: Evaluate results
+        print("Step 6: Evaluating results...")
         evaluation_results = await self.evaluate_results(training_results, characteristics, ctx)
         
         # Step 6: Iterative improvement (if needed)
